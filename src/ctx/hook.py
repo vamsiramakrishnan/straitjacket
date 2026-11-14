@@ -309,15 +309,17 @@ _SECRET_PATH_RE = re.compile(
     r"(^|/)(\.env(\..*)?|\.aws|\.ssh|\.config/gcloud)(/|$)"
     r"|(?<![A-Za-z])(secrets?|credentials?)(?![A-Za-z])"
     r"|\.(pem|key)$|id_rsa|id_ed25519"
-    r"|(^|/)(\.netrc|_netrc|\.npmrc|\.pypirc|\.git-credentials|\.terraformrc|terraform\.rc"
+    # Any letter case, and a backup or copy of one (`.npmrc.bak`, `.netrc~`,
+    # `.npmrc.old`), following the `.env.*` precedent above.
+    r"|(?i:(^|/)(\.netrc|_netrc|\.npmrc|\.pypirc|\.git-credentials|\.terraformrc|terraform\.rc"
     r"|\.docker/config\.json|\.kube/config|\.config/gh/hosts\.ya?ml"
-    r"|\.cargo/credentials(\.toml)?|\.gem/credentials)$"
-    r"|\.tfvars(\.json)?$",
+    r"|\.cargo/credentials(\.toml)?|\.gem/credentials)(\.[^/]*|~)?$)"
+    r"|(?i:\.tfvars(\.json)?(\.[^/]*|~)?$)",
 )
 
 # Secret filenames carrying neither a slash nor a dot: without this the
 # path-shape filter below would skip them.
-_SECRET_BARE_RE = re.compile(r"^(id_rsa|id_ed25519|id_ecdsa|id_dsa|_netrc)$")
+_SECRET_BARE_RE = re.compile(r"^(id_rsa|id_ed25519|id_ecdsa|id_dsa|(?i:_netrc)~?)$")
 
 def _is_secret_path(path_str: str, root: str | None = None) -> bool:
     """Does this path name -- or the file it actually opens -- bear secrets?

@@ -24,7 +24,10 @@ CREDENTIAL_FILES = [
     "terraform.rc", "prod.tfvars", "infra/vars.tfvars.json",
 ]
 ORDINARY = ["package.json", "config.yml", "docker/config.json", "kube/config", "netrc.py",
-            "src/npmrc_parser.py", "terraform.rcx", "notes/tfvars.md", ".npmrc.example.md"]
+            "src/npmrc_parser.py", "terraform.rcx", "notes/tfvars.md", "npmrc.md"]
+#: Backups, copies and other letter cases of the names, as `.env.bak` is.
+VARIANTS = [".npmrc.bak", ".netrc~", ".npmrc.old", ".NPMRC", "TERRAFORM.TFVARS",
+            ".pypirc.orig", ".kube/config.backup", "prod.tfvars.example"]
 HOSTS = ("claude-code", "antigravity", "codex")
 SECRET_REASON = "CTX_CONTEXT_GUARD: secret-bearing path"
 
@@ -36,7 +39,7 @@ def ws(tmp_path, monkeypatch):
     root.mkdir()
     (root / ".git").mkdir()
     (root / "ctx.toml").write_text("version = 1\n", encoding="utf-8")
-    for rel in CREDENTIAL_FILES + ORDINARY:
+    for rel in CREDENTIAL_FILES + ORDINARY + VARIANTS:
         p = root / rel
         p.parent.mkdir(parents=True, exist_ok=True)
         p.write_text("x\n", encoding="utf-8")
@@ -145,3 +148,24 @@ def test_bearer_pattern_leaves_the_repositorys_fixtures_alone():
             except UnicodeDecodeError:
                 continue
             assert not rx.search(text), p
+
+
+@pytest.mark.parametrize("rel", VARIANTS)
+def test_backups_and_case_variants_are_secret(ws, rel):
+    assert hook._is_secret_path(str(ws / rel), str(ws))
+    for flavor in HOSTS:
+        assert _secret_answer(flavor, _emit(flavor, _payload(flavor, ws, path=str(ws / rel))))
+        assert _secret_answer(flavor, _emit(flavor, _payload(flavor, ws, command=f"cat {rel}")))
+
+
+def test_bearer_prose_joined_by_hyphens_or_slashes_is_not_a_token():
+    from ctx.config import Redaction
+    from ctx.textutil import sanitize_for_model
+
+    for text in ("see Bearer authentication-schemes/oauth2-bearer-tokens",
+                 "use Bearer token-based-auth for this", "Bearer api/v2/authorization-header"):
+        assert sanitize_for_model(text, Redaction()) == (text, []), text
+    for token in ("abcdefghijklmnop1234", "550e8400-e29b-41d4-a716-446655440000",
+                  "eyJhbGciOiJIUzI1NiJ9.e30.ZRrHA1JJJW8opsbCGfG_HACGpVUMN_a9IV7pAx_Zmeo"):
+        out, fired = sanitize_for_model(f"Authorization: Bearer {token}", Redaction())
+        assert token not in out and fired, token

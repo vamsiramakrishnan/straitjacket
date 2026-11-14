@@ -588,7 +588,13 @@ cannot remove these, only add to them:
 **/.docker/config.json  **/.kube/config  **/.config/gh/hosts.yml
 **/.config/gh/hosts.yaml  **/.cargo/credentials  **/.cargo/credentials.toml
 **/.gem/credentials  **/.terraformrc  **/terraform.rc  **/*.tfvars  **/*.tfvars.json
+**/.netrc.*  **/.netrc~  **/.npmrc.*  **/.npmrc~  **/.pypirc.*  **/.pypirc~
+**/.git-credentials.*  **/.git-credentials~  **/*.tfvars.*  **/*.tfvars~
 ```
+
+The hook's own check also matches these names in any letter case (`.NPMRC`,
+`TERRAFORM.TFVARS`) and with any backup suffix; the `ctx get` globs above match
+the lower-case names only.
 
 The credential files are named exactly, wherever they are: a project's own `.npmrc`
 or `.pypirc` can hold a registry token as literally as the one in your home

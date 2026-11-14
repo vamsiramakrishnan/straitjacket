@@ -104,7 +104,12 @@ REDACTION_PATTERNS: dict[str, re.Pattern[str]] = {
     # (`Authorization: Bearer eyJhbGciOiJIUzI1NiJ9.e30.sig`): 16+ token
     # characters after the word, so a short JWT the `jwt` shape misses is
     # caught here; `Bearer <token>` and `Bearer realm=...` are not.
-    "bearer-token": re.compile(r"(?i)\bBearer[ \t]+[A-Za-z0-9._~+/-]{16,}=*"),
+    # Words joined by hyphens or slashes (`Bearer authentication-schemes/
+    # oauth2-bearer-tokens`) are prose, not a token.
+    "bearer-token": re.compile(
+        r"\b(?:Bearer|bearer|BEARER)[ \t]+"
+        r"(?![a-z]+\d?(?:[-/][a-z]+\d?)+(?![A-Za-z0-9._~+/=-]))"
+        r"[A-Za-z0-9._~+/-]{16,}=*"),
     # A password inside a URL (`postgres://admin:pw@host/db`, or with an
     # empty user, `redis://:pw@host`): the userinfo part up to the `@`.
     "url-credentials": re.compile(

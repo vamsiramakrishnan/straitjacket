@@ -51,6 +51,17 @@ BUILTIN_DENY_GLOBS = (
     "**/terraform.rc",
     "**/*.tfvars",
     "**/*.tfvars.json",
+    # Backups and copies of the dotfiles above (`.npmrc.bak`, `.netrc~`).
+    "**/.netrc.*",
+    "**/.netrc~",
+    "**/.npmrc.*",
+    "**/.npmrc~",
+    "**/.pypirc.*",
+    "**/.pypirc~",
+    "**/.git-credentials.*",
+    "**/.git-credentials~",
+    "**/*.tfvars.*",
+    "**/*.tfvars~",
 )
 
 
