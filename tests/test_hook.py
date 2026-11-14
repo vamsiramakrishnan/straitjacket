@@ -524,7 +524,8 @@ def test_reader_on_a_device_gets_the_read_guards_outside_ask(tmp_path, cmd):
     # every host), never an unknown-command or volume answer.
     d = _classify("run_command", {"CommandLine": cmd, "Cwd": str(tmp_path)}, tmp_path)
     assert d["decision"] == "force_ask" and "rewrite" not in d, (cmd, d)
-    assert d["reason"].startswith("CTX_CONTEXT_GUARD: path resolves outside"), d
+    assert d["reason"].startswith(("CTX_CONTEXT_GUARD: path resolves outside",
+                                   "CTX_CONTEXT_GUARD: path is not a regular file")), d
 
 
 @pytest.mark.parametrize("cmd", ["sort ~/.netrc", "sort ../../x", "cut -f1 /etc/passwd",
@@ -622,23 +623,21 @@ MAIN_META_VERDICTS = {
     "nl data/sales.csv && echo ok": "captured", "nl data/sales.csv; echo ok": "captured",
     "cat data/sales.csv | sort": "captured", "sort data/sales.csv | head -3": "captured",
     "cut -d, -f1 data/sales.csv | uniq -c": "captured", "seq 1 5 | paste -sd+": "captured",
-    "sort -u data/sales.csv | wc -l": "captured",
+    "sort -u data/sales.csv | wc -l": "captured", 'fold -w 5 "$F"': "captured",
+    "sort $HOME/x": "captured", "sort $(echo data/sales.csv)": "captured",
+    "sort `echo data/sales.csv`": "captured",
     "comm <(sort a) <(sort b)": "captured", "expand data/sales.csv | rev": "captured",
 }
 DELIBERATE = {"base64 data/sales.csv | head -3": ("force_ask", "captured"),
               "echo x | base64": ("force_ask", "captured"),
               # The Read rule for shell readers: an input redirected from a
               # file outside the workspace is a read of that file (the Read
-              # tool asks), and an operand that is not a literal path cannot
-              # be judged, so it is the unknown-command policy's, not a capture.
+              # tool asks). An operand that is not a literal path ($HOME, a
+              # substitution) cannot be judged and keeps main's verdict above.
               "sort < /etc/passwd": ("captured", "force_ask"),
-              "sort $HOME/x": ("captured", "force_ask"),
-              'fold -w 5 "$F"': ("captured", "force_ask"),
               # a brace alternative outside the workspace is a read of it
               "sort {a,/etc/passwd}": ("captured", "force_ask"),
-              # a command substitution names the file: not a literal path
-              "sort $(echo data/sales.csv)": ("captured", "force_ask"),
-              "sort `echo data/sales.csv`": ("captured", "force_ask")}
+}
 
 
 @pytest.mark.parametrize("cmd", list(MAIN_META_VERDICTS) + list(DELIBERATE))

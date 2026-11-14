@@ -202,9 +202,9 @@ def test_replayed_seq_classes_and_base64_part(env, command, kind):
 @pytest.mark.parametrize("command,captured", [
     ("sort lnk", False), ("sort *.txt", False), ("sort ~user/x", False),
     # metacharacters keep main's verdict: captured through the compound/meta path,
-    # except a read of a file outside the workspace (the Read tool asks) and an
-    # operand that is not a literal path (it cannot be judged)
-    ("sort {a.txt,/etc/passwd}", False), ("sort {a,inlnk}.txt", True), ("sort $HOME/x", False), ("sort < a.txt", True),
+    # except a read of a file outside the workspace (the Read tool asks); an
+    # operand that is not a literal path cannot be judged and keeps main's verdict
+    ("sort {a.txt,/etc/passwd}", False), ("sort {a,inlnk}.txt", True), ("sort $HOME/x", True), ("sort < a.txt", True),
     ("sort < /etc/passwd", False),
     ("sort -T/etc a.txt", False), ("seq -s xx 1 400", False),
     ("sort inlnk", True), ("cut -d ',' -f2 a.txt", True), ("sort -t ',' -k2 a.txt", True),

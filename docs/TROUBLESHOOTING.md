@@ -214,19 +214,30 @@ routine for your setup.
 
 **One rule for every read.** A file gets the same decision whether it is read with
 the Read tool or with a shell reader (`cat`, `tac`, `head`, `tail`, `less`, `more`,
-`grep`/`rg`, `awk`, `sed`, `strings`, `xxd`, `od`, `sort`, `cut`, `nl` and the other
-read-only text tools): a secret-bearing path, a path outside the workspace once links
-and `..` are resolved (`/etc/hosts`, `~/notes.txt`, `/tmp/x.log`, a link that points
-out, `/dev/zero`, `/proc/…`, `/dev/stdin`) and, inside the workspace, anything that is
-not a regular file or a directory (a FIFO, a device) is asked about on Claude Code and
-Antigravity and denied on Codex, which has no ask, and is never captured; any other
-file keeps the reader's usual decision (captured, or run as typed). Every file the
-command opens is judged: each operand, a `-f` script or pattern file, an input
-redirect, each alternative of a brace expression. `sudo` and `doas` never change the
-decision, and under them a path the caller cannot even inspect counts as outside. An
-operand that is not a literal path (`$VAR`, a command substitution) cannot be judged,
-so the unknown-command policy decides it, never a silent capture. The one exception
-is the Read tool's own carve-out for Antigravity's MCP schema files.
+`grep`/`rg`, `awk`, `sed`, `strings`, `xxd`, `od`, `hexdump`, `diff`, `jq`, `yq`, `zcat`,
+`bzcat`, `xzcat`, `gzip -dc`, `bat`, `sort`, `cut`, `nl` and the other read-only text
+tools). For each file it opens for reading, in order: a secret-bearing path asks,
+always, also over your allow rules; anything that is not a regular file or a directory
+(`/dev/zero`, `/dev/stdin`, a FIFO, a device) asks, except `/dev/null`; a file inside
+the workspace once links and `..` are resolved, named relatively or absolutely, keeps
+the reader's usual decision (captured, or run as typed); so does a file in a directory
+the host handed this session (Claude Code's own tool-results directory for this
+session, the scratchpad the hook payload names); anything else (`/etc/hosts`,
+`~/notes.txt`, `/tmp/x.log`, a link that points out) is asked about on Claude Code and
+Antigravity and denied on Codex, which has no ask, unless your own rules allow the
+command (`[guard] allow_commands`, a visible Claude Code `Bash(...)` or Antigravity
+allow rule), as before. It is never captured. Every file the command reads is judged:
+each operand, a `-f` script or pattern file, an input redirect (`< f`), each brace
+alternative and glob match (up to 64), the values of literal variables and `for` lists
+assigned in the same command, relative to a literal `cd` earlier in it. The target of
+an output redirect (`> f`, `2> f`, `&> f`, `>& f`) is never a read. `sudo`, `doas`,
+`exec`, `nice`, `ionice`, `env`, `timeout` and their options never change the decision;
+under `sudo`/`doas` a path the caller cannot even inspect counts as outside. What
+cannot be seen in the command text (an environment variable such as `$TMPDIR`, a
+command substitution, a `cd` to one) keeps the decision it had before this rule. The
+Read tool now also asks about a FIFO or device inside the workspace (it used to
+read it, and a FIFO may never end). The one other exception is the Read tool's own
+carve-out for Antigravity's MCP schema files.
 
 ### "unknown output bound for '`<prog>`'"
 
@@ -242,10 +253,10 @@ captured like `cat` when they read workspace files. They still reach this prompt
 they write a file or run a program (`sort -o`/`--out`, `uniq IN OUT`, `sort
 --compress-program`, `sort -T`), take operands from a file, are not the real tool
 (`./sort`, an environment prefix), or name an input ctx cannot see before it runs (a
-glob, `~user`, `$VAR`, a command substitution). A read outside the workspace or of a
-device gets the Read tool's answer instead (see "path resolves outside the active
-workspace" above). Otherwise a command with shell metacharacters (`<`, braces, pipes)
-keeps the verdict it had before these tools were named. `seq` without options is sized by its arguments: up to 400 lines it runs as
+glob or `~user`). A read outside the workspace or of a device gets the Read tool's
+answer instead (see "path resolves outside the active workspace" above). Otherwise a
+command with shell metacharacters (`<`, `$`, braces, pipes) keeps the verdict it had
+before these tools were named. `seq` without options is sized by its arguments: up to 400 lines it runs as
 is, up to a million it is captured, otherwise it asks.
 See [Configuration](CONFIGURATION.md#steering-what-happens-to-a-shell-command).
 

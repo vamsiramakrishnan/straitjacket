@@ -18,9 +18,13 @@ with a minor bump per mechanism wave (see CONTRIBUTING.md).
   `/dev/stdin`), a FIFO or device inside it, or a secret path asks on Claude Code and
   Antigravity and is denied on Codex, under `sudo`/`doas` too, and is never captured. They
   used to be captured or run as typed (`sudo cat /etc/shadow` was captured with no
-  question). A workspace file, a pipeline and a redirect keep their decision. An operand
-  that is not a literal path (`$VAR`, a command substitution) is never captured. On
-  Claude Code and Codex the command's working directory now resolves relative paths.
+  question). A workspace file (named relatively or absolutely), the host's own
+  tool-results and scratchpad directories, a pipeline and an output redirect keep their
+  decision, as do your allow rules except for a secret path. Literal variables, `for`
+  lists, `cd`, globs and wrapper options are followed; an environment variable or a
+  substitution keeps its old decision. The Read tool now asks about a FIFO or device in
+  the workspace. On Claude Code and Codex the command's working directory now resolves
+  relative paths.
 - `ctx run` (and background jobs) store at most `[store] max_capture_bytes` (64 MiB)
   per output stream: past it a stream keeps its head and tail, the middle is dropped and
   counted exactly, and the `capped/v1` digest says `captured X of Y bytes`. Retrieval
