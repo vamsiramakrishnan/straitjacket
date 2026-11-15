@@ -224,9 +224,10 @@ for the same file. A shell reader is one of `cat`, `tac`, `head`, `tail`, `less`
 `rev`, `expand` and `unexpand`; also `find … -exec`/`-execdir` running one of them
 (its starting points are judged as the places read) and `bash`/`sh`/`zsh -c '…'` (the
 script is judged part by part). For each path judged, in order: a secret-bearing path
-asks, also over every allow rule and in any part of a pipeline or chain; anything that
-is not a regular file or a directory (`/dev/zero`, `/dev/stdin`, a FIFO, a device)
-asks, except `/dev/null`; a file inside the workspace once links and `..` are resolved,
+asks, also over every allow rule and in any part of a pipeline or chain (only a secret
+beats an allow rule); anything that is not a regular file or a directory (`/dev/zero`,
+`/dev/stdin`, a FIFO, a device) asks, except `/dev/null`, unless your rules allow the
+command (the capture cap then bounds what it prints); a file inside the workspace once links and `..` are resolved,
 named relatively or absolutely, keeps the reader's usual decision (captured, or run as
 typed); so does a file in a directory the host handed this session (Claude Code's own
 tool-results directory for this session, and the scratchpad the hook payload names when
@@ -235,28 +236,36 @@ above either); anything else (`/etc/hosts`, `~/notes.txt`, `/tmp/x.log`, a link 
 points out) is asked about on Claude Code and Antigravity and denied on Codex, which
 has no ask, unless your own rules allow the whole command: `[guard] allow_commands`, a
 Claude Code `Bash(...)` allow rule in `~/.claude/settings.json`,
-`.claude/settings.json` or `.claude/settings.local.json`, or an Antigravity allow rule.
+`.claude/settings.json` or `.claude/settings.local.json`, or an Antigravity allow rule
+in the forms Antigravity's rewrite check already honours (the whole line, `*`, a
+`regex:` rule, or a prefix of plain words such as `command(cat)`; `command(cat *)` is
+not one of them, so it does not withdraw the ask).
 It is never captured. A compound command gets the strictest answer over all its parts.
 
 The paths judged: each operand of the reader (its pattern or program operand and option
 values skipped); a `-f`/`--file` script or pattern file; an input redirect (`< f`) and
-`$(< f)` anywhere; each brace alternative; a glob's matches (a glob whose literal
-directory is outside the workspace is outside, whatever it matches; in the workspace up
-to 5,000 directory entries are checked, links resolved, and past that bound the glob is
-not judged, although a secret name seen before the bound still asks); literal variables
-and `for` lists assigned earlier in the same command, `${v:-default}` and `${v:=default}`
-defaults, `$HOME`/`${HOME}`/`~` (the account's home from the system, never a changed
+`$(< f)` anywhere, also in quotes and here-strings; the reader's own literal operands in
+`find … -exec <reader> <operands> {} +`; each brace alternative; a glob's matches (a
+glob whose literal directory is outside the workspace is outside, whatever it matches;
+in the workspace up to 5,000 directory entries are checked, links resolved; past that
+bound the rest is not judged, but a secret name, a link out or a device seen before the
+bound still counts); literal variables and `for` lists assigned earlier in the same
+command (a `for` list may use such variables), `${v:-d}`, `${v:=d}`, `${v:+d}` with the
+shell's own rules when `v` is literal, and otherwise every literal path inside the
+expansion, nested ones too (`${a:-${b:-/etc/x}}`), `$HOME`/`${HOME}`/`~` (the account's home from the system, never a changed
 `$HOME`) and `$PWD`; relative paths after a literal `cd` in the same command (a `cd`
-inside `( … )`, `$( … )` or a pipeline ends there). The target of an output redirect
+inside `( … )`, `$( … )`, a pipeline or a background job `cd x &` ends there). The target of an output redirect
 (`> f`, `2> f`, `&> f`, `>& f`) is never a read. `sudo`, `doas`, `exec`, `builtin`, `!`,
 `nice`, `ionice`, `env`, `timeout` and their options never change the decision; under
 `sudo`/`doas` a path the caller cannot even inspect counts as outside.
 
 Not judged, so the decision is the one ctx gave before this rule: a path produced at run
 time (`$(…)`, backticks, a variable set from a command or by `read`, any other
-environment variable such as `$TMPDIR`, a `cd` to one of those), `xargs <reader>` (its
-file names arrive on standard input), files opened by interpreters and scripts
-(`python`, `node`, a shell script file), and a glob over more than 5,000 entries. On
+environment variable such as `$TMPDIR`, a `cd` to one of those), positional
+parameters and `set --` (`cat $1`, `cat "$@"`), shell functions (their arguments, and a
+`cd` before the call), `xargs <reader>` and `find -files0-from` (their file names arrive
+on standard input or from a file), files opened by interpreters and scripts (`python`,
+`node`, a shell script file), and the entries of a glob past the first 5,000. On
 Antigravity a reader whose path is produced at run time is captured, as before.
 
 The Read tool asks about a FIFO or device inside the workspace (it used to read it, and

@@ -2088,6 +2088,13 @@ def _compound_verdict_parts(
     whole = shlex.quote(stripped)
     segments = split_segments(stripped)
     if segments is None:
+        # Unsplittable (a here-string, ...): a `$(< f)` in it still reads f.
+        reads = _SUBST_INPUT_RE.findall(stripped)
+        if reads:
+            verdict = _read_rule_verdict("cat " + " ".join(shlex.quote(f) for f in reads),
+                                         policy, cwd, shctx)
+            if verdict:
+                return _reader_force_ask(verdict)
         return _force_ask(
             "CTX_CONTEXT_GUARD: this shell expression cannot be split into its "
             "commands with confidence, so it is put to you as written. To run "
@@ -2997,7 +3004,9 @@ def _split_redirects(argv: list[str]) -> tuple[list[str], list[str]]:
 
 _FOR_RE = _LazyRe(r"\bfor\s+([A-Za-z_][A-Za-z0-9_]*)\s+in\s+([^;\n]*?)\s*(?:;|\n)\s*do\b")
 _VAR_REF_RE = _LazyRe(
-    r"\$(?:\{([A-Za-z_][A-Za-z0-9_]*)(?:(:?[-=])([^}$`]*))?\}|([A-Za-z_][A-Za-z0-9_]*))")
+    r"\$(?:\{([A-Za-z_][A-Za-z0-9_]*)(?:(:?[-=+?])([^}$`]*))?\}|([A-Za-z_][A-Za-z0-9_]*))")
+#: A literal path inside any ${v<op>word} expansion, nested ones included.
+_EXPANSION_LITERAL_RE = _LazyRe(r"(?<=[-=+?])((?:/|~/|\.\./|\./)[^}$`\s\"']*)")
 
 
 def _shell_context_start(stripped: str, cwd: str | None,
@@ -3077,7 +3086,8 @@ def _segment_layout(stripped: str, segments: list[str]) -> list[tuple[int, int, 
         before = stripped[:at].rstrip()
         after = stripped[at + length:].lstrip() if length == len(seg) else ""
         piped = (before.endswith("|") and not before.endswith("||")) or (
-            after.startswith("|") and not after.startswith("||"))
+            after.startswith("|") and not after.startswith("||")) or (
+            after.startswith("&") and not after.startswith("&&"))  # `cd x &`
         out.append((at, depth_at[min(at, len(depth_at) - 1)], piped))
         pos = at + 1
     return out
@@ -3100,6 +3110,15 @@ def _shell_context_at(ctx: dict[str, Any], offset: int, depth: int) -> dict[str,
     fors = dict(ctx["fors"])
     for start, name, words in ctx.get("for_headers") or ():
         if start < offset:
+            if words is not None:
+                expanded: list[str] | None = []
+                for w in words:  # `for g in $f` with f literal before the loop
+                    alts = _expand_word(w, new)
+                    if alts is None:
+                        expanded = None
+                        break
+                    expanded += alts
+                words = expanded
             fors[name] = words
     new["fors"] = fors
     new["key"] = _ctx_key(new)
@@ -3181,14 +3200,25 @@ def _expand_word(word: str, ctx: dict[str, Any] | None) -> list[str] | None:
         lit = word[pos:m.start()]
         if "$" in lit:
             return None
+        op, word_ = m.group(2), m.group(3)
         if name in ctx["vars"]:
-            if ctx["vars"][name] is None:
+            value = ctx["vars"][name]
+            if value is None:
                 return None
-            choices = [ctx["vars"][name]]
-        elif ctx["fors"].get(name):
+            if op in (":-", ":="):
+                choices = [value if value != "" else word_]
+            elif op == ":+":
+                choices = [word_ if value != "" else ""]
+            elif op == "+":
+                choices = [word_]
+            else:
+                choices = [value]  # plain, `-`, `=`, `?`: set, so its value
+        elif ctx["fors"].get(name) and not op:
             choices = list(ctx["fors"][name])
-        elif m.group(2) is not None:
-            choices = [m.group(3)]  # ${v:-default}: v has no literal value here
+        elif op in (":-", "-", ":=", "="):
+            choices = [word_]  # ${v:-default}: v has no literal value here
+        elif op is not None:
+            return None
         elif name == "HOME":
             home = _account_home()
             if not home:
@@ -3245,7 +3275,9 @@ def _glob_class(pattern: str, root: str | None, trusted: dict[str, Any] | None) 
             with os.scandir(lit_dir) as it:
                 for n, entry in enumerate(it):
                     if n >= _GLOB_ENTRIES_MAX:
-                        return "skip"  # (a secret seen before the bound returned already)
+                        # Past the bound: what was found so far still counts
+                        # (a link out, a device); the rest is not judged.
+                        return worst or "skip"
                     name = entry.name
                     if (name.startswith(".") and not hidden_ok) or \
                             (not match_all and not _glob_matches(name, name_pat)):
@@ -3274,12 +3306,12 @@ def _glob_class(pattern: str, root: str | None, trusted: dict[str, Any] | None) 
         found = list(islice(_glob.iglob(pattern), _GLOB_ENTRIES_MAX + 1))
     except (OSError, ValueError, re.error):
         return "skip"
-    if len(found) > _GLOB_ENTRIES_MAX:
-        return "skip"
-    for path in found:
+    for path in found[:_GLOB_ENTRIES_MAX]:
         c = _read_path_class(path, root, trusted)
         if c and _READ_CLASS_RANK[c] > _READ_CLASS_RANK.get(worst or "", 0):
             worst = c
+    if len(found) > _GLOB_ENTRIES_MAX:
+        return worst or "skip"
     return worst
 
 
@@ -3319,7 +3351,16 @@ def _find_exec_roots(argv: list[str]) -> list[str] | None:
         if a in _FIND_EXEC and j + 1 < len(argv):
             inner, _el = _unwrap_for_read(argv[j + 1:])
             if inner and os.path.basename(inner[0]) in _FILE_READERS:
-                return roots or ["."]
+                # The reader's own literal operands are read too
+                # (`find . -exec cat /etc/x {} +`), up to the terminator.
+                body: list[str] = []
+                for w in inner:
+                    if w in (";", "+"):
+                        break
+                    body.append(w)
+                own = [o for o in _reader_operands(os.path.basename(inner[0]), body)
+                       if "{}" not in o]
+                return (roots or ["."]) + own
     return None
 
 
@@ -3374,6 +3415,11 @@ def _read_rule_verdict(command: str, policy: dict[str, Any], cwd: str | None,
 
     for op in operands:
         words = _expand_word(op, ctx)
+        if words is None and "${" in op:
+            # Not resolved exactly (nested `${a:-${b:-/etc/x}}`, an alternate
+            # `${a:+/etc/x}` of an unknown a): every literal path inside the
+            # expansion may be the one read, so each is judged.
+            words = [m.group(1) for m in _EXPANSION_LITERAL_RE.finditer(op)] or None
         if words is None:
             continue
         for w in words:
@@ -3492,20 +3538,11 @@ def _host_allow_keeps_base(decision: dict[str, Any], payload: dict[str, Any],
 
             rules, _unknown = agyperm.load_rules()
             allows = rules["global"]["allow"] + rules["project"]["allow"]
-            try:
-                words = shlex.split(command)
-            except ValueError:
-                words = []
-            for body in allows:
-                if body == command or body == "*" or agyperm._proves_allowed(body, command):
-                    return keep
-                try:
-                    want = shlex.split(body)
-                except ValueError:
-                    continue
-                if want and not body.startswith("regex:") and words[:len(want)] == want \
-                        and not _SHELL_META_RE.search(command):
-                    return keep
+            # The forms base itself honours as proof (agyperm._proves_allowed,
+            # used by rewrite_verdict): the whole line, `*`, `regex:` tokens,
+            # a prefix of plain words. `cat *` is not one of them: it asks.
+            if any(agyperm._proves_allowed(body, command) for body in allows):
+                return keep
     except Exception:
         return decision
     return decision

@@ -30,7 +30,9 @@ CREDENTIAL_NAMES = (
     ".gem/credentials",
 )
 #: Suffixes that make a copy a template, not a credential file.
-TEMPLATE_SUFFIXES = ("example", "sample", "template", "dist", "tmpl", "defaults")
+#: (Not `dist` or `defaults`: a `.npmrc.dist` or `.netrc.defaults` is where a
+#: real default login would sit.)
+TEMPLATE_SUFFIXES = ("example", "sample", "template", "tmpl")
 
 _TEMPLATE = "|".join(TEMPLATE_SUFFIXES)
 _NAMES = "|".join(re.escape(n) for n in CREDENTIAL_NAMES)

@@ -592,8 +592,9 @@ Credential files are refused by name as well, by the same list the shell guard u
 `.git-credentials`, `.terraformrc`, `terraform.rc`, `.docker/config.json`,
 `.kube/config`, `.config/gh/hosts.yml`/`.yaml`, `.cargo/credentials(.toml)`,
 `.gem/credentials` and `*.tfvars(.json)`. A template copy is not a credential file:
-a suffix `.example`, `.sample`, `.template`, `.dist`, `.tmpl` or `.defaults`
-(`.npmrc.example`, `terraform.tfvars.sample`). A project's own `.npmrc` or `.pypirc`
+a suffix `.example`, `.sample`, `.template` or `.tmpl` (`.npmrc.example`,
+`terraform.tfvars.sample`); `.dist` and `.defaults` copies are credential files, since a
+real default login sits there. A project's own `.npmrc` or `.pypirc`
 can hold a registry token as literally as the one in your home directory, so it is
 treated the same. `*.tfvars` is included because Terraform variable files are where
 provider passwords and keys conventionally go (GitHub's Terraform `.gitignore` excludes

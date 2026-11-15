@@ -10,7 +10,8 @@ with a minor bump per mechanism wave (see CONTRIBUTING.md).
   reader, at home or in a project: `.netrc`, `_netrc`, `.npmrc`, `.pypirc`,
   `.git-credentials`, `.docker/config.json`, `.kube/config`, `.config/gh/hosts.yml`,
   `.cargo/credentials`, `.gem/credentials`, `.terraformrc`, `terraform.rc` and `*.tfvars`,
-  in any letter case and with backup suffixes, not template copies (`.npmrc.example`);
+  in any letter case and with backup suffixes, not template copies (`.npmrc.example`,
+  `.sample`, `.template`, `.tmpl`);
   `ctx get`/`ctx search` refuse the same list.
   A new `bearer-token` redaction pattern blanks `Bearer <16+ token characters>`,
   including a JWT too short for the `jwt` pattern.

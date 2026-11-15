@@ -22,9 +22,11 @@ def world(tmp_path, monkeypatch):
     home = tmp_path / "home"
     (home / ".ssh").mkdir(parents=True)
     (home / ".ssh" / "k1").write_text("key\n")
+    for i in range(70):  # more than the 64 matches round 1 expanded
+        (home / ".ssh" / f"pub{i}").write_text("k\n")
     (home / "notes.txt").write_text("n\n")
     monkeypatch.setenv("HOME", str(home))
-    monkeypatch.setattr(hook, "_account_home", lambda: str(home))
+    monkeypatch.setattr(hook, "_account_home", lambda: str(home), raising=False)
     monkeypatch.setenv("CTX_STATE_HOME", str(tmp_path / "state"))
     cfg = tmp_path / "cfg"
     cfg.mkdir()
@@ -40,8 +42,12 @@ def world(tmp_path, monkeypatch):
     (ws / "link_sec.txt").symlink_to(".env")
     many = ws / "many2"
     many.mkdir()
+    # More than 64 matches for every pattern used below: round 1 judged at
+    # most 64 glob matches and kept base past that, so these fail there.
     for i in range(80):
         (many / f"f{i:02d}.txt").write_text("x\n")
+        (many / f"c{i:02d}.json").write_text("{}\n")
+        (many / f"z{i:02d}.txt").write_text("x\n")
     (many / "credentials.json").write_text("{}\n")
     (many / "zlink").symlink_to("/etc/passwd")
     outside_dir = tmp_path / "elsewhere" / "deep" / "dir"
@@ -112,8 +118,25 @@ SECRET_COMPOUNDS = ["cat /etc/passwd; cat .env", "cat /etc/passwd | cat .env",
                     "cat /etc/passwd | tail .env", "cat .env; cat /etc/passwd"]
 
 
+@pytest.mark.parametrize("command", ["cat /etc/passwd; cat .env", "cat /etc/passwd | cat .env",
+                                     "cat /etc/passwd && cat .env"])
+def test_a_secret_in_a_later_part_wins_over_a_user_allow_rule(world, monkeypatch, command):
+    # The round-2 blocker as reported: ~/.claude/settings.json (the user
+    # layer, no CLAUDE_CONFIG_DIR) allows Bash(cat:*). On 08aeb79 the first
+    # part's outside ask won the compound and the allow withdrew it.
+    monkeypatch.delenv("CLAUDE_CONFIG_DIR", raising=False)
+    claude = world["home"] / ".claude"
+    claude.mkdir()
+    (claude / "settings.json").write_text(json.dumps({"permissions": {"allow": ["Bash(cat:*)"]}}))
+    out = _run(world, "claude-code", command)
+    assert _kind("claude-code", out) == "ask", out
+    assert "secret-bearing path" in json.dumps(out), out
+
+
 @pytest.mark.parametrize("command", SECRET_COMPOUNDS)
 def test_a_secret_in_any_part_wins_over_every_allow_source(world, command):
+    # Regression guard over all sources at once (it also holds on 08aeb79);
+    # the failing-first case is the user-layer test above.
     _allow_everywhere(world)
     for flavor in HOSTS:
         out = _run(world, flavor, command)
@@ -131,6 +154,7 @@ def test_without_allows_a_compound_takes_its_strictest_part(world):
 @pytest.mark.parametrize("command", ["cat /etc/*", "cat /etc/[a-z]*", "cat ~/.ssh/*",
                                      "for f in /etc/*; do cat $f; done", "cat /etc/*/*"])
 def test_a_glob_whose_directory_is_outside_is_outside(world, command):
+    # `cat ~/.ssh/*` also held before (the literal `.ssh/` is a secret name).
     for flavor in HOSTS:
         assert _kind(flavor, _run(world, flavor, command)) == ASK[flavor], (flavor, command)
 
@@ -144,34 +168,55 @@ def test_a_workspace_glob_is_judged_entry_by_entry(world, command):
 
 
 def test_a_glob_link_out_is_outside_and_plain_files_pass(world):
-    out = _run(world, "claude-code", "cat many2/z*")
+    out = _run(world, "claude-code", "cat many2/z*")  # 81 matches
     assert "path resolves outside" in json.dumps(out), out
     assert not _fired(_run(world, "claude-code", "cat many2/f0*"))
 
 
-def test_a_glob_over_more_than_5000_entries_keeps_base(world):
+def test_a_glob_over_more_than_5000_entries_keeps_base_when_nothing_was_seen(world):
+    # Keep-base check (the stated limit): nothing outside among 5,001 entries.
     big = world["ws"] / "big"
     big.mkdir()
     for i in range(5001):
         (big / f"f{i}").touch()
-    (big / "zz-out").symlink_to("/etc/passwd")
     import time
 
     start = time.perf_counter()
     out = _run(world, "claude-code", "cat big/*")
-    assert not _fired(out), out  # stated limit: not judged past 5,000 entries
+    assert not _fired(out), out
     assert time.perf_counter() - start < 5
+
+
+def test_a_link_out_seen_before_the_bound_is_kept(world):
+    # Round 3 item 1: the scan stops at 5,000 entries but keeps what it saw.
+    big = world["ws"] / "bl"
+    big.mkdir()
+    for i in range(6000):
+        (big / f"f{i}").touch()
+    for n in range(50):
+        link = big / f"lnk_out{n}"
+        link.symlink_to("/etc/passwd")
+        names = [e.name for e in os.scandir(big)]
+        if names.index(link.name) < 4900:
+            break
+        link.unlink()
+    for command in ("cat bl/*", "cat bl/lnk*"):
+        out = _run(world, "claude-code", command)
+        assert "path resolves outside" in json.dumps(out), (command, out)
 
 
 # ------------------------------------------------------------------ item 3
 @pytest.mark.parametrize("command", [
-    'bash -lc "cat /etc/passwd"', "sh -ec 'cat /etc/passwd'", "bash -c 'cd /etc; cat passwd'",
+    'bash -lc "cat /etc/passwd"', "sh -ec 'cat /etc/passwd'", "bash -lc 'cd /etc; cat passwd'",
     "! cat /etc/passwd", "cat ${f:-/etc/passwd}", "cat ${f:=/etc/passwd}",
     "x=$(< /etc/passwd)", 'echo "$(< /etc/passwd)"',
     "find /etc -maxdepth 1 -type f -exec cat {} +", "find /etc -execdir head -n 1 {} \\;",
     "cat $HOME/notes.txt", "cat ${HOME}/notes.txt", "cat ~/notes.txt", "cat ~",
 ])
-def test_forms_visible_in_the_text_are_judged(world, command):
+def test_forms_visible_in_the_text_are_judged(world, monkeypatch, command):
+    # $HOME points into the workspace: `~` and $HOME must still mean the
+    # account's home (outside), which round 1 did not do.
+    monkeypatch.setenv("HOME", str(world["ws"]))
     for flavor in HOSTS:
         assert _kind(flavor, _run(world, flavor, command)) == ASK[flavor], (flavor, command)
 
@@ -183,6 +228,7 @@ def test_forms_visible_in_the_text_are_judged(world, command):
     "F=$(ls /etc/passwd); cat $F", "read f; cat $f",
 ])
 def test_paths_inside_or_produced_at_run_time_keep_base(world, command):
+    # Keep-base checks: these must not ask (they did not before either).
     for flavor in HOSTS:
         assert not _fired(_run(world, flavor, command)), (flavor, command)
 
@@ -236,6 +282,8 @@ def test_scoped_cd_positional_bindings_and_run_time_paths_do_not_ask(world, comm
 
 
 def test_a_binding_applies_from_its_own_position(world):
+    # Regression guard (held in round 1 too); the false ask round 2 fixed is
+    # in test_scoped_cd_positional_bindings_and_run_time_paths_do_not_ask.
     command = "for f in /etc/passwd; do echo $f; done; for f in a.txt; do cat $f; done"
     assert not _fired(_run(world, "claude-code", command))
     command = "for f in a.txt; do echo $f; done; for f in /etc/passwd; do cat $f; done"
@@ -258,6 +306,7 @@ def test_a_scratchpad_that_covers_the_workspace_or_home_is_ignored(world, which)
 
 
 def test_a_proper_scratchpad_is_trusted(world):
+    # Keep-base check: the stricter scratchpad test is the parametrised one above.
     f = world["outside"] / "x.txt"
     f.write_text("x\n")
     for flavor in ("claude-code", "codex"):
@@ -266,3 +315,45 @@ def test_a_proper_scratchpad_is_trusted(world):
         assert _kind(flavor, out) == "pass", out
         out = _run(world, flavor, f"cat {f}", scratchpad_dir=str(world["outside"]))
         assert _kind(flavor, out) == "pass", out
+
+
+
+# ------------------------------------------------------------------ round 3
+@pytest.mark.parametrize("command", [
+    "f=/etc/passwd; for g in $f; do cat $g; done", "cat ${a:-${b:-/etc/passwd}}",
+    "cat ${a:+/etc/passwd}", "a=; cat ${a:-/etc/passwd}", 'cat <<< "$(< /etc/passwd)"',
+    "find . -exec cat /etc/passwd {} +", "find . -exec head -n 1 /etc/passwd {} \\;",
+])
+def test_round3_forms_are_judged(world, command):
+    for flavor in HOSTS:
+        assert _kind(flavor, _run(world, flavor, command)) == ASK[flavor], (flavor, command)
+
+
+@pytest.mark.parametrize("command", [
+    "f=a.txt; for g in $f; do cat $g; done", "a=x.txt; cat ${a:-/etc/passwd}",
+    "cd /etc & cat a.txt", "find . -exec cat {} +",
+])
+def test_round3_forms_that_keep_base(world, command):
+    # Keep-base checks.
+    for flavor in HOSTS:
+        assert not _fired(_run(world, flavor, command)), (flavor, command)
+
+
+@pytest.mark.parametrize("name", [".npmrc.dist", ".netrc.defaults"])
+def test_dist_and_defaults_copies_are_credential_files(world, name):
+    # Fails on 776c57d, which exempted these suffixes as templates (08aeb79
+    # had no template exemption at all).
+    (world["ws"] / name).write_text("x\n")
+    for flavor in HOSTS:
+        assert "secret-bearing path" in json.dumps(_run(world, flavor, f"cat {name}"))
+
+
+def test_antigravity_honours_exactly_base_allow_forms(world):
+    agy = world["home"] / ".gemini" / "antigravity-cli" / "settings.json"
+    agy.parent.mkdir(parents=True)
+    agy.write_text(json.dumps({"permissions": {"allow": ["command(cat *)"]}}))
+    # Keep-safe check: `cat *` is not a form base's agyperm proves, so the
+    # ask stands (it did on 776c57d too); `cat` withdraws it.
+    assert _kind("antigravity", _run(world, "antigravity", "cat /etc/passwd")) == "ask"
+    agy.write_text(json.dumps({"permissions": {"allow": ["command(cat)"]}}))
+    assert _kind("antigravity", _run(world, "antigravity", "cat /etc/passwd")) == "pass"

@@ -27,7 +27,7 @@ ORDINARY = ["package.json", "config.yml", "docker/config.json", "kube/config", "
             "src/npmrc_parser.py", "terraform.rcx", "notes/tfvars.md", "npmrc.md"]
 #: Template copies: not credential files (one shared list, ctx.secretpaths).
 TEMPLATES = ["terraform.tfvars.example", ".npmrc.example", ".npmrc.sample", ".pypirc.sample",
-             ".netrc.template", "x.tfvars.dist"]
+             ".netrc.template", "x.tfvars.tmpl"]
 #: Backups, copies and other letter cases of the names, as `.env.bak` is.
 VARIANTS = [".npmrc.bak", ".netrc~", ".npmrc.old", ".NPMRC", "TERRAFORM.TFVARS",
             ".pypirc.orig", ".kube/config.backup", "prod.tfvars.bak"]
