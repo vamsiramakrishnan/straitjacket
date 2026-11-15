@@ -6,6 +6,41 @@ with a minor bump per mechanism wave (see CONTRIBUTING.md).
 
 ## [Unreleased]
 
+## [0.44.0] - 2026-11-15
+
+- Digests of text-like command output (`ctx run` and the hook's output gate) carry an
+  evidence map: the error-like lines are grouped into distinct messages, the digest states
+  exactly how many lines and messages there are and how many are shown, listed or not
+  listed, the top three messages appear as excerpts with real line numbers, and the rest
+  are listed up to `[budgets] evidence_map_bytes` (1500) with one exact command (the
+  `messages` span kind) that lists them all. A collapsed slot shows its unusual values or
+  the command that lists them, and a capped parse continues at the line the cap cut.
+  Listing pages are sized to the delivery budget before their header, so a header never
+  claims rows that were cut. On Claude Code, a failed shell command whose output is over
+  the budget gets the same digest as added context; when the host cut the failure text
+  and kept no copy, a once-per-session line says so and names
+  `ctx run --passthrough --shell -- '<command>'`.
+- Optional decision-model picker (`[picker] mode = local|shadow|model`, default `local`,
+  which sends nothing and loads no network code). `shadow` also asks a decisions endpoint
+  and records both choices while the local digest is delivered unchanged; `model` expands
+  the excerpts its yes/no relevance scores choose. Only a file in the account's own home
+  (`.config/ctx/config.toml`, owned by you, not group- or world-writable) can turn it on
+  or set its endpoint, model and key variable (`GEMINI_API_KEY`, `GOOGLE_API_KEY` or
+  `CTX_PICKER_API_KEY`); a workspace `ctx.toml` or the environment can only turn it off or
+  lower its limits. In those modes a live delivery sends an intent line, the command and
+  redacted candidate excerpts, never the output itself; the call has a 3 s deadline and
+  fails open to the local digest. Each digest is recorded in
+  `.ctx-session-reads/picker.jsonl` and `ctx replay --picker` reports it. See
+  [Configuration](docs/CONFIGURATION.md).
+- `ctx search` on a file larger than the 1 MiB index limit, named on its own or in a
+  corpus of at most eight files, now scans it directly instead of reporting zero matches;
+  a binary file is reported as skipped, and a wider search names the files it did not
+  search.
+- On Antigravity, standalone text readers (`nl`, `fold`, `sort`, `cut`, `base64` and the
+  like), git listings (`ls-files`, `ls-tree -r`, `rev-list`, `grep`) and `ls` with a glob
+  are captured like `cat` instead of asking or flooding; forms that write a file, run a
+  program, read outside the workspace or are bounded by their own arguments keep their
+  earlier decision.
 - Well-known credential files are secret paths, through the Read tool and every shell
   reader, at home or in a project: `.netrc`, `_netrc`, `.npmrc`, `.pypirc`,
   `.git-credentials`, `.docker/config.json`, `.kube/config`, `.config/gh/hosts.yml`,
