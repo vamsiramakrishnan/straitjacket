@@ -624,7 +624,7 @@ MAIN_META_VERDICTS = {
     "cat data/sales.csv | sort": "captured", "sort data/sales.csv | head -3": "captured",
     "cut -d, -f1 data/sales.csv | uniq -c": "captured", "seq 1 5 | paste -sd+": "captured",
     "sort -u data/sales.csv | wc -l": "captured", 'fold -w 5 "$F"': "captured",
-    "sort $HOME/x": "captured", "sort $(echo data/sales.csv)": "captured",
+    "sort $(echo data/sales.csv)": "captured",
     "sort `echo data/sales.csv`": "captured",
     "comm <(sort a) <(sort b)": "captured", "expand data/sales.csv | rev": "captured",
 }
@@ -637,6 +637,8 @@ DELIBERATE = {"base64 data/sales.csv | head -3": ("force_ask", "captured"),
               "sort < /etc/passwd": ("captured", "force_ask"),
               # a brace alternative outside the workspace is a read of it
               "sort {a,/etc/passwd}": ("captured", "force_ask"),
+              # $HOME is the account's home, judged like ~: outside
+              "sort $HOME/x": ("captured", "force_ask"),
 }
 
 

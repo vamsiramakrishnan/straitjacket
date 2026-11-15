@@ -170,7 +170,7 @@ AGY_UNCHANGED = {
     "grep line a.txt | wc -l": "captured", "sed -n 1,5p a.txt": "captured",
     "head a.txt": "allow", "tail a.txt": "allow", "sort a.txt": "captured",
     "cat ../ws/a.txt": "captured", "cat a.*": "captured",
-    "cat $HOME/notes.txt": "captured", 'head -n 2 "$F"': "captured",
+'head -n 2 "$F"': "captured",
     "cat $(echo /etc/shadow)": "captured", "cat $TMPDIR/x": "captured",
     "cat /dev/null": "captured", "cat < /dev/null": "captured",
     "cd $X && cat hosts": "captured", "gzip /tmp/x": "force_ask",

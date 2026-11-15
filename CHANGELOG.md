@@ -9,7 +9,9 @@ with a minor bump per mechanism wave (see CONTRIBUTING.md).
 - Well-known credential files are secret paths, through the Read tool and every shell
   reader, at home or in a project: `.netrc`, `_netrc`, `.npmrc`, `.pypirc`,
   `.git-credentials`, `.docker/config.json`, `.kube/config`, `.config/gh/hosts.yml`,
-  `.cargo/credentials`, `.gem/credentials`, `.terraformrc`, `terraform.rc` and `*.tfvars`.
+  `.cargo/credentials`, `.gem/credentials`, `.terraformrc`, `terraform.rc` and `*.tfvars`,
+  in any letter case and with backup suffixes, not template copies (`.npmrc.example`);
+  `ctx get`/`ctx search` refuse the same list.
   A new `bearer-token` redaction pattern blanks `Bearer <16+ token characters>`,
   including a JWT too short for the `jwt` pattern.
 - Shell readers (`cat`, `head`, `tail`, `less`, `more`, `grep`, `awk`, `sed`, `sort`, `cut`
@@ -22,7 +24,11 @@ with a minor bump per mechanism wave (see CONTRIBUTING.md).
   tool-results and scratchpad directories, a pipeline and an output redirect keep their
   decision, as do your allow rules except for a secret path. Literal variables, `for`
   lists, `cd`, globs and wrapper options are followed; an environment variable or a
-  substitution keeps its old decision. The Read tool now asks about a FIFO or device in
+  substitution keeps its old decision; `$HOME`, `~`, `$PWD`, `${v:-default}`, `$(< f)`,
+  `bash -c` scripts, `find -exec <reader>` roots and globs (up to 5,000 entries) are
+  followed. A compound command gets its strictest part, and a secret in any part is
+  never withdrawn by an allow rule (Claude Code user, project and local settings,
+  Antigravity rules, `allow_commands`). The Read tool now asks about a FIFO or device in
   the workspace. On Claude Code and Codex the command's working directory now resolves
   relative paths.
 - `ctx run` (and background jobs) store at most `[store] max_capture_bytes` (64 MiB)

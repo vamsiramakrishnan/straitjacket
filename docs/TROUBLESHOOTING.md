@@ -188,7 +188,9 @@ row stating the current behaviour.
 `*.pem`, `*.key`, `id_rsa`, `credentials`, `secrets`, and credential files by name:
 `.netrc`/`_netrc`, `.npmrc`, `.pypirc`, `.git-credentials`, `.docker/config.json`,
 `.kube/config`, `.config/gh/hosts.yml`, `.cargo/credentials`, `.gem/credentials`,
-`.terraformrc`/`terraform.rc`, `*.tfvars`, in your home or in a project) always force-asks and is
+`.terraformrc`/`terraform.rc`, `*.tfvars`, in any letter case and with a backup suffix, in
+your home or in a project, but not a template copy such as `.npmrc.example`) always
+force-asks and is
 excluded from automatic capture — even under permissive steering. **Fix:**
 confirm the prompt if you really intend it; there's no way to silence this by
 config, by design.
@@ -212,32 +214,54 @@ outside the workspace root. **Fix:** confirm the prompt, pass `--workspace` to
 widen the root, or set `[workspace] allow_outside_root = true` if this is
 routine for your setup.
 
-**One rule for every read.** A file gets the same decision whether it is read with
-the Read tool or with a shell reader (`cat`, `tac`, `head`, `tail`, `less`, `more`,
-`grep`/`rg`, `awk`, `sed`, `strings`, `xxd`, `od`, `hexdump`, `diff`, `jq`, `yq`, `zcat`,
-`bzcat`, `xzcat`, `gzip -dc`, `bat`, `sort`, `cut`, `nl` and the other read-only text
-tools). For each file it opens for reading, in order: a secret-bearing path asks,
-always, also over your allow rules; anything that is not a regular file or a directory
-(`/dev/zero`, `/dev/stdin`, a FIFO, a device) asks, except `/dev/null`; a file inside
-the workspace once links and `..` are resolved, named relatively or absolutely, keeps
-the reader's usual decision (captured, or run as typed); so does a file in a directory
-the host handed this session (Claude Code's own tool-results directory for this
-session, the scratchpad the hook payload names); anything else (`/etc/hosts`,
-`~/notes.txt`, `/tmp/x.log`, a link that points out) is asked about on Claude Code and
-Antigravity and denied on Codex, which has no ask, unless your own rules allow the
-command (`[guard] allow_commands`, a visible Claude Code `Bash(...)` or Antigravity
-allow rule), as before. It is never captured. Every file the command reads is judged:
-each operand, a `-f` script or pattern file, an input redirect (`< f`), each brace
-alternative and glob match (up to 64), the values of literal variables and `for` lists
-assigned in the same command, relative to a literal `cd` earlier in it. The target of
-an output redirect (`> f`, `2> f`, `&> f`, `>& f`) is never a read. `sudo`, `doas`,
-`exec`, `nice`, `ionice`, `env`, `timeout` and their options never change the decision;
-under `sudo`/`doas` a path the caller cannot even inspect counts as outside. What
-cannot be seen in the command text (an environment variable such as `$TMPDIR`, a
-command substitution, a `cd` to one) keeps the decision it had before this rule. The
-Read tool now also asks about a FIFO or device inside the workspace (it used to
-read it, and a FIFO may never end). The one other exception is the Read tool's own
-carve-out for Antigravity's MCP schema files.
+**One rule for every read.** This is a guard for paths that can be seen in the command
+text, not a sandbox: it judges what a command visibly names, and a command can still
+open files it does not name. The Read tool and the shell readers get the same decision
+for the same file. A shell reader is one of `cat`, `tac`, `head`, `tail`, `less`, `more`,
+`grep`/`egrep`/`fgrep`/`rg`/`ag`/`ack`, `awk`/`gawk`/`mawk`/`nawk`, `sed`, `strings`,
+`xxd`, `od`, `hexdump`, `diff`, `jq`, `yq`, `zcat`, `bzcat`, `xzcat`, `gzip -dc`, `bat`,
+`nl`, `fold`, `fmt`, `column`, `paste`, `comm`, `seq`, `sort`, `cut`, `uniq`, `base64`,
+`rev`, `expand` and `unexpand`; also `find … -exec`/`-execdir` running one of them
+(its starting points are judged as the places read) and `bash`/`sh`/`zsh -c '…'` (the
+script is judged part by part). For each path judged, in order: a secret-bearing path
+asks, also over every allow rule and in any part of a pipeline or chain; anything that
+is not a regular file or a directory (`/dev/zero`, `/dev/stdin`, a FIFO, a device)
+asks, except `/dev/null`; a file inside the workspace once links and `..` are resolved,
+named relatively or absolutely, keeps the reader's usual decision (captured, or run as
+typed); so does a file in a directory the host handed this session (Claude Code's own
+tool-results directory for this session, and the scratchpad the hook payload names when
+it is at least three levels deep and neither the workspace, the home directory nor
+above either); anything else (`/etc/hosts`, `~/notes.txt`, `/tmp/x.log`, a link that
+points out) is asked about on Claude Code and Antigravity and denied on Codex, which
+has no ask, unless your own rules allow the whole command: `[guard] allow_commands`, a
+Claude Code `Bash(...)` allow rule in `~/.claude/settings.json`,
+`.claude/settings.json` or `.claude/settings.local.json`, or an Antigravity allow rule.
+It is never captured. A compound command gets the strictest answer over all its parts.
+
+The paths judged: each operand of the reader (its pattern or program operand and option
+values skipped); a `-f`/`--file` script or pattern file; an input redirect (`< f`) and
+`$(< f)` anywhere; each brace alternative; a glob's matches (a glob whose literal
+directory is outside the workspace is outside, whatever it matches; in the workspace up
+to 5,000 directory entries are checked, links resolved, and past that bound the glob is
+not judged, although a secret name seen before the bound still asks); literal variables
+and `for` lists assigned earlier in the same command, `${v:-default}` and `${v:=default}`
+defaults, `$HOME`/`${HOME}`/`~` (the account's home from the system, never a changed
+`$HOME`) and `$PWD`; relative paths after a literal `cd` in the same command (a `cd`
+inside `( … )`, `$( … )` or a pipeline ends there). The target of an output redirect
+(`> f`, `2> f`, `&> f`, `>& f`) is never a read. `sudo`, `doas`, `exec`, `builtin`, `!`,
+`nice`, `ionice`, `env`, `timeout` and their options never change the decision; under
+`sudo`/`doas` a path the caller cannot even inspect counts as outside.
+
+Not judged, so the decision is the one ctx gave before this rule: a path produced at run
+time (`$(…)`, backticks, a variable set from a command or by `read`, any other
+environment variable such as `$TMPDIR`, a `cd` to one of those), `xargs <reader>` (its
+file names arrive on standard input), files opened by interpreters and scripts
+(`python`, `node`, a shell script file), and a glob over more than 5,000 entries. On
+Antigravity a reader whose path is produced at run time is captured, as before.
+
+The Read tool asks about a FIFO or device inside the workspace (it used to read it, and
+a FIFO may never end). The one other exception is the Read tool's own carve-out for
+Antigravity's MCP schema files.
 
 ### "unknown output bound for '`<prog>`'"
 

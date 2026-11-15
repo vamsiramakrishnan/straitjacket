@@ -290,6 +290,22 @@ _BOUNDED_CMDS = {
 # one too; without it every first-program allow below was a bypass.
 _SHELL_META_RE = re.compile(r"[|;&<>`$(){}\\\n\r]|\|\||&&|\$\(")
 
+class _LazyRe:
+    """A regex compiled on first use: the read rule's patterns cost nothing
+    on a call that never judges a path (the hook is a fresh process per
+    call, so module-level compiles are paid every time)."""
+
+    __slots__ = ("_args", "_rx")
+
+    def __init__(self, *args):
+        self._args, self._rx = args, None
+
+    def __getattr__(self, name):
+        if self._rx is None:
+            self._rx = re.compile(*self._args)
+        return getattr(self._rx, name)
+
+
 # The token used to have to be a WHOLE path component, so `secrets.json`,
 # `my-secrets.yaml` and `app-credentials.env` all walked past the guard --
 # a classifier whose entire job is to catch secret-bearing paths, blind to
@@ -301,7 +317,7 @@ _SHELL_META_RE = re.compile(r"[|;&<>`$(){}\\\n\r]|\|\||&&|\$\(")
 # Well-known credential files by name (.netrc, .npmrc, *.tfvars ...): one list,
 # ctx.secretpaths, shared with retrieval, in any letter case, with backup
 # suffixes and without template copies.
-_SECRET_PATH_RE = re.compile(
+_SECRET_PATH_RE = _LazyRe(
     r"(^|/)(\.env(\..*)?|\.aws|\.ssh|\.config/gcloud)(/|$)"
     r"|(?<![A-Za-z])(secrets?|credentials?)(?![A-Za-z])"
     r"|\.(pem|key)$|id_rsa|id_ed25519|" + _CREDENTIAL_PATTERN,
@@ -1747,6 +1763,8 @@ def classify_command(
             text = segments[0]
             if shctx is None:
                 shctx = _shell_context_start(command, cwd, None)
+                offset, depth, _piped = _segment_layout(command.strip(), segments)[0]
+                shctx = _shell_context_at(shctx, offset, depth)
     out = _apply_read_rule(decision, text, policy, cwd, shctx)
     out.pop("_user_allow", None)
     return out
@@ -2026,9 +2044,42 @@ def _redaction_policy(policy: dict[str, Any]):
                             tuple(pats) if isinstance(pats, list) else tuple(REDACTION_PATTERNS))
 
 
+_READ_ASK_RANK = {"CTX_CONTEXT_GUARD: path is not a regular file": 2,
+                  "CTX_CONTEXT_GUARD: path resolves outside": 1}
+
+
 def _compound_verdict(
     stripped: str, policy: dict[str, Any], _depth: int, *, cwd: str | None,
     shctx: dict[str, Any] | None = None,
+) -> dict[str, Any] | None:
+    """The compound verdict with the Read rule judged over EVERY part.
+
+    A part's Read-rule ask (outside, not a file) does not end the walk the
+    way a safety answer does: the parts are classified on their base
+    decisions, so a later part's secret ask, committed deny or in-place ask
+    is still found, and the whole command's base decision is what a user
+    allow rule may restore (_host_allow_keeps_base). A secret is never a
+    Read-rule ask here: it returns as the safety answer it is."""
+    read_asks: list[dict[str, Any]] = []
+    result = _compound_verdict_parts(stripped, policy, _depth, cwd=cwd, shctx=shctx,
+                                     read_asks=read_asks)
+    if result is None or not read_asks:
+        return result
+    if (result.get("_safety") or _is_safety_ask(result)
+            or "CTX_CONTEXT_GUARD: in-place" in str(result.get("reason") or "")):
+        return result
+    strongest = max(read_asks, key=lambda d: max(
+        (r for k, r in _READ_ASK_RANK.items() if str(d.get("reason", "")).startswith(k)),
+        default=0))
+    out = {k: v for k, v in strongest.items() if k != "_base"}
+    out["_base"] = result
+    out["_read_rule"] = "1"
+    return out
+
+
+def _compound_verdict_parts(
+    stripped: str, policy: dict[str, Any], _depth: int, *, cwd: str | None,
+    shctx: dict[str, Any] | None = None, read_asks: list | None = None,
 ) -> dict[str, Any] | None:
     """The whole command's verdict from its parts, or None to classify it
     as one command (it is one simple command)."""
@@ -2052,7 +2103,8 @@ def _compound_verdict(
     # repeats its parts: `cat f | grep x && echo stepN` sixty times).
     seen: dict[Any, tuple[dict[str, Any], Any]] = {}
     ctx = _shell_context_start(stripped, cwd, shctx)
-    for seg in segments:
+    for seg, (offset, sdepth, piped) in zip(segments, _segment_layout(stripped, segments)):
+        ctx = _shell_context_at(ctx, offset, sdepth)
         key = (seg, ctx["key"])
         hit = seen.get(key)
         if hit is None:
@@ -2060,8 +2112,13 @@ def _compound_verdict(
                                     shctx=ctx),
                    _part_program(seg))
             seen[key] = hit
-        ctx = _shell_context_step(ctx, seg)
+        ctx = _shell_context_step(ctx, seg, piped)
         d, part = hit
+        if d.get("_read_rule") and read_asks is not None:
+            # Judged at the end over all parts (_compound_verdict); the walk
+            # goes on with this part's own base decision.
+            read_asks.append(d)
+            d = d.get("_base") or dict(DECISION_ALLOW)
         prog, argv = part if part is not None else ("", [])
         decisions.append(d)
         if d.get("_safety"):
@@ -2664,13 +2721,8 @@ def _read_path_class(path_abs: str, root: str | None,
     except (OSError, ValueError):
         return "outside" if root else None
     top = _real_root(root) if root else None
-
-    def scoped(p: str) -> str:
-        if top and (p == top or p.startswith(top + os.sep)):
-            return os.path.relpath(p, top).replace("\\", "/")
-        return p.replace("\\", "/")
-
-    if _SECRET_PATH_RE.search(scoped(literal)) or _SECRET_PATH_RE.search(scoped(real)):
+    if _SECRET_PATH_RE.search(_scoped_to(literal, top)) or \
+            _SECRET_PATH_RE.search(_scoped_to(real, top)):
         return "secret"
     try:
         st = os.stat(real)
@@ -2688,6 +2740,13 @@ def _read_path_class(path_abs: str, root: str | None,
     return "outside"
 
 
+def _scoped_to(p: str, top: str | None) -> str:
+    """``p`` relative to the real workspace root when inside it, else whole."""
+    if top and (p == top or p.startswith(top + os.sep)):
+        return os.path.relpath(p, top).replace("\\", "/")
+    return p.replace("\\", "/")
+
+
 _REAL_ROOTS: dict[str, str] = {}
 
 
@@ -2699,10 +2758,30 @@ def _real_root(root: str) -> str:
     return real
 
 
-def _trusted_dirs(payload: dict[str, Any]) -> dict[str, Any]:
+def _account_home() -> str:
+    """The account's home from the OS account database, never ``$HOME``: the
+    source ctx.config.account_home uses for the picker, read directly here
+    because ctx.config is too heavy to import on the hook's hot path."""
+    try:
+        import pwd
+
+        return pwd.getpwuid(os.getuid()).pw_dir or ""
+    except (ImportError, KeyError, OSError):
+        return ""
+
+
+def _is_ancestor_or_same(a: str, b: str) -> bool:
+    """Is directory ``a`` equal to, or above, ``b``?"""
+    a = a.rstrip(os.sep) or os.sep
+    return b == a or b.startswith(a if a.endswith(os.sep) else a + os.sep)
+
+
+def _trusted_dirs(payload: dict[str, Any], ws_root: str | None = None) -> dict[str, Any]:
     """Directories the host handed this session: Claude Code's own
     ``<config>/projects/<project>/<session_id>/tool-results/`` (the location
-    _host_full_output trusts) and the scratchpad the payload names."""
+    _host_full_output trusts) and the scratchpad the payload names -- the
+    latter only when it is at least three components deep and neither the
+    workspace, the home directory nor an ancestor of either."""
     out: dict[str, Any] = {"session": "", "projects": "", "dirs": []}
     session = str(payload.get("session_id") or "")
     if session and "/" not in session and session not in (".", ".."):
@@ -2710,16 +2789,24 @@ def _trusted_dirs(payload: dict[str, Any]) -> dict[str, Any]:
                   or os.path.join(os.path.expanduser("~"), ".claude"))
         out["session"] = session
         out["projects"] = os.path.realpath(os.path.join(config, "projects"))
+    guarded = [os.path.realpath(d) for d in (ws_root, _account_home(),
+                                             os.environ.get("HOME")) if d]
     for key in ("scratchpad_dir", "scratchpadDir", "scratchpad_path"):
         v = payload.get(key)
-        if isinstance(v, str) and os.path.isabs(v):
-            real = os.path.realpath(v)
-            if real != os.sep:
-                out["dirs"].append(real)
+        if not (isinstance(v, str) and os.path.isabs(v)):
+            continue
+        real = os.path.realpath(v)
+        if len([c for c in real.split(os.sep) if c]) < 3:
+            continue
+        if any(_is_ancestor_or_same(real, g) for g in guarded):
+            continue
+        out["dirs"].append(real)
     return out
 
 
 def _in_trusted_dir(path_abs: str, trusted: dict[str, Any]) -> bool:
+    if "dirs" not in trusted and "_payload" in trusted:
+        trusted.update(_trusted_dirs(trusted["_payload"], trusted.get("_root")))
     real = os.path.realpath(path_abs)
     for d in trusted.get("dirs") or ():
         if real == d or real.startswith(d + os.sep):
@@ -2849,7 +2936,7 @@ def _unwrap_for_read(argv: list[str]) -> tuple[list[str], bool]:
     while i < len(argv):
         tok = argv[i]
         prog = os.path.basename(tok)
-        if _ENV_ASSIGN_RE.match(tok):
+        if _ENV_ASSIGN_RE.match(tok) or tok == "!":
             i += 1
             continue
         if prog not in _READ_WRAPPERS:
@@ -2881,7 +2968,7 @@ def _unwrap_for_read(argv: list[str]) -> tuple[list[str], bool]:
     return argv[i:], elevated
 
 
-_REDIR_TOKEN_RE = re.compile(r"^(\d*|&)(>>|>\||>&|>|<<<|<<-?|<>|<&|<)(.*)$", re.S)
+_REDIR_TOKEN_RE = _LazyRe(r"^(\d*|&)(>>|>\||>&|>|<<<|<<-?|<>|<&|<)(.*)$", re.S)
 
 
 def _split_redirects(argv: list[str]) -> tuple[list[str], list[str]]:
@@ -2891,7 +2978,7 @@ def _split_redirects(argv: list[str]) -> tuple[list[str], list[str]]:
     inputs: list[str] = []
     i = 0
     while i < len(argv):
-        m = _REDIR_TOKEN_RE.match(argv[i]) if i else None
+        m = _REDIR_TOKEN_RE.match(argv[i])
         if not m:
             out.append(argv[i])
             i += 1
@@ -2908,35 +2995,123 @@ def _split_redirects(argv: list[str]) -> tuple[list[str], list[str]]:
     return out, inputs
 
 
-_FOR_RE = re.compile(r"\bfor\s+([A-Za-z_][A-Za-z0-9_]*)\s+in\s+([^;\n]*?)\s*(?:;|\n)\s*do\b")
-_VAR_REF_RE = re.compile(r"\$(?:\{([A-Za-z_][A-Za-z0-9_]*)\}|([A-Za-z_][A-Za-z0-9_]*))")
+_FOR_RE = _LazyRe(r"\bfor\s+([A-Za-z_][A-Za-z0-9_]*)\s+in\s+([^;\n]*?)\s*(?:;|\n)\s*do\b")
+_VAR_REF_RE = _LazyRe(
+    r"\$(?:\{([A-Za-z_][A-Za-z0-9_]*)(?:(:?[-=])([^}$`]*))?\}|([A-Za-z_][A-Za-z0-9_]*))")
 
 
 def _shell_context_start(stripped: str, cwd: str | None,
                          outer: dict[str, Any] | None) -> dict[str, Any]:
-    """What the command text itself says before its first part runs: the
-    literal ``for NAME in WORDS`` lists (WORDS unsplit when not literal)."""
-    ctx = {"vars": dict((outer or {}).get("vars") or {}),
-           "fors": dict((outer or {}).get("fors") or {}),
-           "cwd": (outer or {}).get("cwd") or cwd,
-           "cwd_dynamic": bool((outer or {}).get("cwd_dynamic"))}
+    """What the command text says before its first part runs: the literal
+    ``for NAME in WORDS`` headers with their positions (a use sees the
+    binding in effect where it stands), and whether the command holds a
+    substitution (its result reaches the parts as ``_``)."""
+    o = outer or {}
+    ctx = {"vars": dict(o.get("vars") or {}),
+           "fors": dict(o.get("fors") or {}),
+           "for_headers": [],
+           "cwd": o.get("cwd") or cwd,
+           "cwd_dynamic": bool(o.get("cwd_dynamic")),
+           "subst": bool(o.get("subst")) or "$(" in stripped or "`" in stripped,
+           "depth": 0, "saved": {}}
     for m in _FOR_RE.finditer(stripped):
         try:
             words = shlex.split(m.group(2))
         except ValueError:
             words = None
-        if words is not None and any("$" in w or "`" in w for w in words):
+        if words is not None and any("`" in w or "$(" in w for w in words):
             words = None
-        ctx["fors"][m.group(1)] = words
-    ctx["key"] = repr((sorted(ctx["vars"].items()), ctx["cwd"], ctx["cwd_dynamic"]))
+        ctx["for_headers"].append((m.start(), m.group(1), words))
+    ctx["key"] = _ctx_key(ctx)
     return ctx
 
 
-def _shell_context_step(ctx: dict[str, Any], seg: str) -> dict[str, Any]:
+def _ctx_key(ctx: dict[str, Any]) -> str:
+    return repr((sorted(ctx["vars"].items()), sorted((k, tuple(v) if v else v)
+                                                     for k, v in ctx["fors"].items()),
+                 ctx["cwd"], ctx["cwd_dynamic"]))
+
+
+def _segment_layout(stripped: str, segments: list[str]) -> list[tuple[int, int, bool]]:
+    """``(offset, paren depth, in a pipeline)`` per part, located in the raw
+    command in order (a part the splitter rewrote is placed where the search
+    stands). Depth counts ``(`` and ``$(`` outside quotes."""
+    depth_at = []
+    depth = 0
+    quote = ""
+    i = 0
+    n = len(stripped)
+    while i < n:
+        ch = stripped[i]
+        depth_at.append(depth)
+        if quote == "'":
+            if ch == "'":
+                quote = ""
+        elif ch == "\\":
+            depth_at.append(depth)
+            i += 1
+        elif quote == '"':
+            if ch == '"':
+                quote = ""
+            elif ch == "$" and i + 1 < n and stripped[i + 1] == "(":
+                depth += 1
+        elif ch in "'\"":
+            quote = ch
+        elif ch == "(":
+            depth += 1
+        elif ch == ")":
+            depth = max(0, depth - 1)
+        i += 1
+    depth_at.append(depth)
+    out = []
+    pos = 0
+    for seg in segments:
+        at = stripped.find(seg, pos)
+        length = len(seg)
+        if at == -1:
+            words = seg.split()
+            at = stripped.find(words[0], pos) if words else -1
+            length = len(words[0]) if words else 0
+        if at == -1:
+            at, length = pos, 0
+        before = stripped[:at].rstrip()
+        after = stripped[at + length:].lstrip() if length == len(seg) else ""
+        piped = (before.endswith("|") and not before.endswith("||")) or (
+            after.startswith("|") and not after.startswith("||"))
+        out.append((at, depth_at[min(at, len(depth_at) - 1)], piped))
+        pos = at + 1
+    return out
+
+
+def _shell_context_at(ctx: dict[str, Any], offset: int, depth: int) -> dict[str, Any]:
+    """The context a part at ``offset``/``depth`` sees: a ``cd`` made inside
+    a subshell or substitution ends with it, and each ``for`` variable is
+    bound by the last header before the part."""
+    new = dict(ctx)
+    saved = dict(ctx.get("saved") or {})
+    cur = ctx.get("depth", 0)
+    if depth > cur:
+        for k in range(cur, depth):
+            saved.setdefault(k, (new["cwd"], new["cwd_dynamic"]))
+    elif depth < cur:
+        new["cwd"], new["cwd_dynamic"] = saved.get(depth, (new["cwd"], new["cwd_dynamic"]))
+        saved = {k: v for k, v in saved.items() if k < depth}
+    new["depth"], new["saved"] = depth, saved
+    fors = dict(ctx["fors"])
+    for start, name, words in ctx.get("for_headers") or ():
+        if start < offset:
+            fors[name] = words
+    new["fors"] = fors
+    new["key"] = _ctx_key(new)
+    return new
+
+
+def _shell_context_step(ctx: dict[str, Any], seg: str, piped: bool = False) -> dict[str, Any]:
     """The context after part ``seg`` ran: a literal assignment sets a
-    variable (anything else makes it unknown), a literal ``cd`` moves the
-    directory later relative paths are resolved against, any other ``cd``
-    makes that directory unknown."""
+    variable (a substitution or anything not literal makes it unknown), a
+    literal ``cd`` moves the directory later relative paths are resolved
+    against, any other ``cd`` makes that directory unknown. A ``cd`` in a
+    pipeline runs in its own subshell and changes nothing."""
     try:
         words = shlex.split(seg)
     except ValueError:
@@ -2953,14 +3128,15 @@ def _shell_context_step(ctx: dict[str, Any], seg: str) -> dict[str, Any]:
             alts = _expand_word(value, ctx)
             new["vars"][name] = alts[0] if alts and len(alts) == 1 else None
     elif words[0] in ("cd", "pushd"):
+        if piped:
+            return ctx
         args = [w for w in words[1:] if w not in ("-P", "-L", "-e", "-@")]
         target = args[0] if args else "~"
         alts = _expand_word(target, ctx) if target != "-" else None
-        if not alts or len(alts) != 1 or new["cwd_dynamic"] and not os.path.isabs(
-                os.path.expanduser(alts[0])):
+        dest = _home_expand(alts[0]) if alts and len(alts) == 1 else None
+        if dest is None or (new["cwd_dynamic"] and not os.path.isabs(dest)):
             new["cwd_dynamic"] = True
         else:
-            dest = os.path.expanduser(alts[0])
             new["cwd"] = os.path.normpath(os.path.join(ctx["cwd"] or os.getcwd(), dest))
             new["cwd_dynamic"] = False
     elif words[0] == "read":
@@ -2970,29 +3146,56 @@ def _shell_context_step(ctx: dict[str, Any], seg: str) -> dict[str, Any]:
                 new["vars"][w] = None
     else:
         return ctx
-    new["key"] = repr((sorted(new["vars"].items()), new["cwd"], new["cwd_dynamic"]))
+    new["key"] = _ctx_key(new)
     return new
 
 
+def _home_expand(word: str) -> str:
+    """``~`` and ``~/x`` against the account's home (never ``$HOME``);
+    ``~user`` through the account database."""
+    if word == "~" or word.startswith("~/"):
+        home = _account_home()
+        return home + word[1:] if home else word
+    if word.startswith("~"):
+        return os.path.expanduser(word)
+    return word
+
+
 def _expand_word(word: str, ctx: dict[str, Any] | None) -> list[str] | None:
-    """The literal words ``word`` stands for, using the command's own literal
-    assignments and ``for`` lists; None when anything in it is dynamic (an
-    unassigned or environment variable, a substitution)."""
+    """The literal words ``word`` stands for: the command's own literal
+    assignments and ``for`` lists, ``${v:-default}``/``${v:=default}``
+    defaults, ``$HOME`` (the account's home) and ``$PWD`` (the directory at
+    that point). None when anything in it is produced at run time (an
+    unassigned or environment variable, a substitution or its ``_``)."""
     if "$" not in word and "`" not in word:
+        if ctx is not None and ctx.get("subst") and "_" in word.split("/"):
+            return None  # where a substitution's result stands
         return [word]
-    if "`" in word or "$(" in word or ctx is None:
+    if "`" in word or "$(" in word:
         return None
+    ctx = ctx or {"vars": {}, "fors": {}}
     outs = [""]
     pos = 0
     for m in _VAR_REF_RE.finditer(word):
-        name = m.group(1) or m.group(2)
+        name = m.group(1) or m.group(4)
         lit = word[pos:m.start()]
         if "$" in lit:
             return None
-        if name in ctx["vars"] and ctx["vars"][name] is not None:
+        if name in ctx["vars"]:
+            if ctx["vars"][name] is None:
+                return None
             choices = [ctx["vars"][name]]
         elif ctx["fors"].get(name):
             choices = list(ctx["fors"][name])
+        elif m.group(2) is not None:
+            choices = [m.group(3)]  # ${v:-default}: v has no literal value here
+        elif name == "HOME":
+            home = _account_home()
+            if not home:
+                return None
+            choices = [home]
+        elif name == "PWD" and ctx.get("cwd") and not ctx.get("cwd_dynamic"):
+            choices = [ctx["cwd"]]
         else:
             return None
         outs = [o + lit + c for o in outs for c in choices]
@@ -3005,39 +3208,132 @@ def _expand_word(word: str, ctx: dict[str, Any] | None) -> list[str] | None:
     return [o + tail for o in outs]
 
 
-_GLOB_MAX = 64
+_GLOB_ENTRIES_MAX = 5000
+_GLOB_CHARS_SET = frozenset("*?[")
 
 
-def _expand_glob(word: str, base: str) -> list[str] | None:
-    """The files a glob names now, at most _GLOB_MAX; the word itself when
-    nothing matches (the shell passes it on); None when there are more."""
-    if not any(ch in word for ch in "*?["):
-        return [word]
+def _glob_class(pattern: str, root: str | None, trusted: dict[str, Any] | None) -> str | None:
+    """The Read-rule class of an absolute glob. Its literal directory part
+    outside the workspace (and the host-handed directories) is outside, a
+    secret directory is secret, whatever it matches. Inside, up to
+    _GLOB_ENTRIES_MAX entries are enumerated: every name is checked against
+    the secret list, only links are resolved (a regular file in a directory
+    already inside is inside), and anything that is not a file or directory
+    is not_file. Over the bound, or on an error: "skip" (not judged)."""
+    parts = pattern.split("/")
+    k = next(i for i, part in enumerate(parts) if _GLOB_CHARS_SET & set(part))
+    lit_dir = "/".join(parts[:k]) or "/"
+    cls = _read_path_class(lit_dir, root, trusted)
+    if cls in ("secret", "outside"):
+        return cls
+    from ctx.pathglob import matches as _glob_matches
+
+    top = _real_root(root) if root else None
+    worst: str | None = None
+    if k == len(parts) - 1:
+        name_pat = parts[k]
+        hidden_ok = name_pat.startswith(".")
+        try:
+            real_dir = os.path.realpath(lit_dir)
+            # The directory's scoped forms once; each name is appended to them.
+            pre_lit = _scoped_to(os.path.abspath(lit_dir), top)
+            pre_real = _scoped_to(real_dir, top)
+            pre_lit = "" if pre_lit == "." else pre_lit.rstrip("/") + "/"
+            pre_real = "" if pre_real == "." else pre_real.rstrip("/") + "/"
+            same_pre = pre_lit == pre_real
+            match_all = name_pat == "*"
+            with os.scandir(lit_dir) as it:
+                for n, entry in enumerate(it):
+                    if n >= _GLOB_ENTRIES_MAX:
+                        return "skip"  # (a secret seen before the bound returned already)
+                    name = entry.name
+                    if (name.startswith(".") and not hidden_ok) or \
+                            (not match_all and not _glob_matches(name, name_pat)):
+                        continue
+                    lit = os.path.join(lit_dir, name)
+                    if _SECRET_PATH_RE.search(pre_lit + name) or (
+                            same_pre is False and _SECRET_PATH_RE.search(pre_real + name)):
+                        return "secret"
+                    if entry.is_symlink():
+                        c = _read_path_class(lit, root, trusted)
+                    elif entry.is_file(follow_symlinks=False) or entry.is_dir(follow_symlinks=False):
+                        c = None
+                    else:
+                        c = "not_file"
+                    if c and _READ_CLASS_RANK[c] > _READ_CLASS_RANK.get(worst or "", 0):
+                        worst = c
+                        if c == "secret":
+                            return c
+        except OSError:
+            return "skip"
+        return worst
     import glob as _glob
     from itertools import islice
 
-    pattern = os.path.expanduser(word)
     try:
-        if os.path.isabs(pattern):
-            found = list(islice(_glob.iglob(pattern), _GLOB_MAX + 1))
-        else:
-            found = list(islice(_glob.iglob(pattern, root_dir=base), _GLOB_MAX + 1))
+        found = list(islice(_glob.iglob(pattern), _GLOB_ENTRIES_MAX + 1))
     except (OSError, ValueError, re.error):
-        return None
-    if len(found) > _GLOB_MAX:
-        return None
-    return found or [word]
+        return "skip"
+    if len(found) > _GLOB_ENTRIES_MAX:
+        return "skip"
+    for path in found:
+        c = _read_path_class(path, root, trusted)
+        if c and _READ_CLASS_RANK[c] > _READ_CLASS_RANK.get(worst or "", 0):
+            worst = c
+    return worst
 
 
 _READ_CLASS_RANK = {"secret": 3, "not_file": 2, "outside": 2}
 
 
+_SHELLS = frozenset({"bash", "sh", "zsh", "dash", "ksh", "mksh", "ash"})
+_FIND_EXEC = frozenset({"-exec", "-execdir", "-ok", "-okdir"})
+_SUBST_INPUT_RE = _LazyRe(r"\$\(\s*<\s*([^()\s;|&<>]+)\s*\)")
+
+
+def _shell_script(argv: list[str]) -> str | None:
+    """The script of ``bash -c``/``sh -ec``/``bash -lc`` (any short-option
+    cluster holding ``c``), or None."""
+    for i, a in enumerate(argv[1:], start=1):
+        if a == "--" or not a.startswith("-") or a.startswith("--"):
+            return None
+        if "c" in a[1:]:
+            rest = [x for x in argv[i + 1:]]
+            while rest and rest[0].startswith("-") and rest[0] != "-":
+                rest = rest[1:]
+            return rest[0] if rest else None
+    return None
+
+
+def _find_exec_roots(argv: list[str]) -> list[str] | None:
+    """The starting points of ``find ... -exec <reader> ...``: the places it
+    reads. None when no reader is executed."""
+    roots: list[str] = []
+    i = 1
+    while i < len(argv) and argv[i] in ("-H", "-L", "-P"):
+        i += 1
+    while i < len(argv) and not argv[i].startswith("-") and argv[i] not in ("(", "!", ","):
+        roots.append(argv[i])
+        i += 1
+    for j, a in enumerate(argv):
+        if a in _FIND_EXEC and j + 1 < len(argv):
+            inner, _el = _unwrap_for_read(argv[j + 1:])
+            if inner and os.path.basename(inner[0]) in _FILE_READERS:
+                return roots or ["."]
+    return None
+
+
 def _read_rule_verdict(command: str, policy: dict[str, Any], cwd: str | None,
-                       shctx: dict[str, Any] | None) -> str | None:
-    """The strictest Read-rule class over the files this command reads, or
-    None. Operands that cannot be seen in the text (an environment variable,
-    a substitution, a glob over too many files, a path relative to a ``cd``
-    that cannot be followed) are not judged: they keep base's decision."""
+                       shctx: dict[str, Any] | None, _depth: int = 0) -> str | None:
+    """The strictest Read-rule class over the files this command visibly
+    reads, or None. Not judged (base's decision stands): a path produced at
+    run time (a substitution, a variable set from a command or ``read``, an
+    environment variable other than ``$HOME``/``$PWD``), ``xargs`` (its names
+    arrive on stdin), files interpreters and scripts open, a glob over more
+    than _GLOB_ENTRIES_MAX entries, a path relative to a ``cd`` that cannot
+    be followed."""
+    if _depth > 3:
+        return None
     try:
         argv = shlex.split(command)
     except ValueError:
@@ -3046,47 +3342,90 @@ def _read_rule_verdict(command: str, policy: dict[str, Any], cwd: str | None,
     if argv and os.path.basename(argv[0]) == "ctx" and len(argv) > 2 and argv[1] == "run":
         argv, again = _unwrap_for_read(_ctx_run_inner(argv))  # what `ctx run --` runs
         elevated = elevated or again
-    if not argv:
-        return None
+    extra = _SUBST_INPUT_RE.findall(command)  # `$(< f)` reads f, wherever it stands
+    if argv and os.path.basename(argv[0]) in _SHELLS:
+        script = _shell_script(argv)
+        if script is not None:
+            return _script_read_verdict(script, policy, cwd, shctx, _depth + 1)
     argv, inputs = _split_redirects(argv)
     prog = os.path.basename(argv[0]) if argv else ""
-    if prog not in _FILE_READERS or (prog == "gzip" and not _gzip_prints(argv)):
-        return None
-    operands = inputs + _reader_operands(prog, argv)
+    operands = list(extra)
+    if not argv:
+        operands += inputs  # a part that is only `< f`: the inside of `$(< f)`
+    elif prog == "find":
+        roots = _find_exec_roots(argv)
+        operands += roots or []
+    elif prog in _FILE_READERS and not (prog == "gzip" and not _gzip_prints(argv)):
+        operands += inputs + _reader_operands(prog, argv)
     if not operands:
         return None
     root = policy.get("_ws_root")
     trusted = policy.get("_trusted")
-    base = (shctx or {}).get("cwd") or cwd or root or os.getcwd()
-    rel_dynamic = bool((shctx or {}).get("cwd_dynamic"))
+    ctx = shctx if shctx is not None else {"vars": {}, "fors": {}, "cwd": cwd,
+                                           "cwd_dynamic": False, "subst": False}
+    base = ctx.get("cwd") or cwd or root or os.getcwd()
+    rel_dynamic = bool(ctx.get("cwd_dynamic"))
     worst: str | None = None
+
+    def note(cls: str | None) -> None:
+        nonlocal worst
+        if cls and _READ_CLASS_RANK[cls] > _READ_CLASS_RANK.get(worst or "", 0):
+            worst = cls
+
     for op in operands:
-        words = _expand_word(op, shctx)
+        words = _expand_word(op, ctx)
         if words is None:
             continue
         for w in words:
             for alt in (_brace_alternatives(w) if "{" in w else [w]) or ():
-                paths = _expand_glob(alt, base)
-                if paths is None:
+                p = _home_expand(alt)
+                if not os.path.isabs(p):
+                    if rel_dynamic:
+                        continue
+                    p = os.path.join(base, p)
+                p = os.path.normpath(p)
+                if _GLOB_CHARS_SET & set(p):
+                    cls = _glob_class(p, root, trusted)
+                    if cls != "skip":
+                        note(cls)
                     continue
-                for path in paths:
-                    p = os.path.expanduser(path)
-                    if not os.path.isabs(p):
-                        if rel_dynamic:
-                            continue
-                        p = os.path.join(base, p)
-                    if p == "/dev/null":
-                        continue  # empty to read; `< /dev/null` is an idiom
-                    cls = _read_path_class(p, root, trusted)
-                    if cls is None and elevated:
-                        try:
-                            os.stat(p)
-                        except PermissionError:
-                            cls = "outside"  # the elevated reader opens what we cannot see
-                        except OSError:
-                            pass
-                    if cls and _READ_CLASS_RANK[cls] > _READ_CLASS_RANK.get(worst or "", 0):
-                        worst = cls
+                if p == "/dev/null":
+                    continue  # empty to read; `< /dev/null` is an idiom
+                cls = _read_path_class(p, root, trusted)
+                if cls is None and elevated:
+                    try:
+                        os.stat(p)
+                    except PermissionError:
+                        cls = "outside"  # the elevated reader opens what we cannot see
+                    except OSError:
+                        pass
+                note(cls)
+                if worst == "secret":
+                    return worst
+    return worst
+
+
+def _script_read_verdict(script: str, policy: dict[str, Any], cwd: str | None,
+                         shctx: dict[str, Any] | None, _depth: int = 0) -> str | None:
+    """The strictest Read-rule class over every part of a shell script (a
+    ``bash -c`` string), each part seeing the bindings and ``cd`` in effect
+    where it stands."""
+    from ctx.shsplit import split_segments
+
+    stripped = script.strip()
+    segments = split_segments(stripped) if _SHELL_META_RE.search(stripped) else [stripped]
+    if not segments:
+        return None
+    ctx = _shell_context_start(stripped, cwd, shctx)
+    worst: str | None = None
+    for seg, (offset, depth, piped) in zip(segments, _segment_layout(stripped, segments)):
+        ctx = _shell_context_at(ctx, offset, depth)
+        cls = _read_rule_verdict(seg, policy, cwd, ctx, _depth)
+        if cls and _READ_CLASS_RANK[cls] > _READ_CLASS_RANK.get(worst or "", 0):
+            worst = cls
+            if cls == "secret":
+                return cls
+        ctx = _shell_context_step(ctx, seg, piped)
     return worst
 
 
@@ -3122,35 +3461,51 @@ def _apply_read_rule(decision: dict[str, Any], command: str, policy: dict[str, A
 
 def _host_allow_keeps_base(decision: dict[str, Any], payload: dict[str, Any],
                            flavor: str, ws_root: str | None) -> dict[str, Any]:
-    """A Read-rule ask on a command the user's own host rules allow is
-    withdrawn: base's decision stands, as it did before the rule existed."""
+    """A Read-rule ask (never a secret one) on a command the user's own host
+    rules allow is withdrawn: base's decision stands, as it did before the
+    rule existed. Claude Code: allow rules from the user, project and local
+    settings layers (``settings.local.json`` is where "always allow" goes)
+    and managed settings, read by ctx.ccperm; every part of the command must
+    be allowed (by a rule, or as a read-only command on workspace paths).
+    Antigravity: its global and project allow rules (ctx.agyperm), as a
+    whole-line or word-prefix match."""
     if not isinstance(decision, dict) or not decision.get("_read_rule"):
         return decision
     base = decision.pop("_base", None)
     decision.pop("_read_rule", None)
-    command = _tool_command(payload) or ""
+    command = (_tool_command(payload) or "").strip()
+    keep = base if isinstance(base, dict) else dict(DECISION_ALLOW)
     try:
         if flavor == "claude-code":
             from ctx import ccperm
 
             cwd = payload.get("cwd") if isinstance(payload.get("cwd"), str) else ws_root
             rules = ccperm.cached_rules(ws_root, cwd)
-            allows = []
-            for rule in rules.get("allow") or ():
-                parsed = ccperm.parse_rule(rule)
-                if parsed and parsed[0] == "Bash" and ccperm._param_rule(parsed[1]) is None:
-                    allows.append(parsed[1])
+            allows = list(rules.get("allow_any") or rules.get("allow") or ())
             segments = ccperm.liberal_segments(command)
             if allows and segments and all(
-                    any(ccperm.bash_spec_matches(a, seg) for a in allows) for seg in segments):
-                return base if isinstance(base, dict) else dict(DECISION_ALLOW)
+                    ccperm._proven(ccperm._strip(ccperm._words(seg)), allows)
+                    for seg in segments):
+                return keep
         elif flavor == "antigravity":
             from ctx import agyperm
 
             rules, _unknown = agyperm.load_rules()
             allows = rules["global"]["allow"] + rules["project"]["allow"]
-            if any(agyperm._proves_allowed(b, command.strip()) for b in allows):
-                return base if isinstance(base, dict) else dict(DECISION_ALLOW)
+            try:
+                words = shlex.split(command)
+            except ValueError:
+                words = []
+            for body in allows:
+                if body == command or body == "*" or agyperm._proves_allowed(body, command):
+                    return keep
+                try:
+                    want = shlex.split(body)
+                except ValueError:
+                    continue
+                if want and not body.startswith("regex:") and words[:len(want)] == want \
+                        and not _SHELL_META_RE.search(command):
+                    return keep
     except Exception:
         return decision
     return decision
@@ -4205,7 +4560,9 @@ def classify(
     policy["_ws_root"] = workspace_root
     # Directories the host handed this session (tool results, scratchpad):
     # a read there is not a read outside the workspace (_read_path_class).
-    policy["_trusted"] = _trusted_dirs(payload)
+    # Resolved lazily, only for a path already found outside the workspace
+    # (_in_trusted_dir): nothing is computed for a command that reads nothing.
+    policy["_trusted"] = {"_payload": payload, "_root": workspace_root}
     _APPLY_ROOT["root"] = workspace_root
 
     if policy.get("mode") == "advisory":
@@ -4428,6 +4785,10 @@ def classify(
                     policy["_media_note"] = "media:shell_hint"
             except Exception:
                 pass
+        if isinstance(decision.get("_base"), dict):
+            # The decision a host allow rule may restore (_host_allow_keeps_base)
+            # is emitted like any other: its capture rewrite converted too.
+            decision["_base"] = _apply_rewrite(dict(decision["_base"]), tool_input, command_key)
         return _apply_rewrite(decision, tool_input, command_key)
 
     if kind == "read":
