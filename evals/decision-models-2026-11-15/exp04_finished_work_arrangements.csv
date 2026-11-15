@@ -1,0 +1,8 @@
+arrangement,flags_or_items_per_session,mean_per_session,lost_test_causes_named,review_cost_per_session,share_of_session_cost,added_api_time_per_session
+"mid-size general model reviews each edit, edit only",cattrs 0 / bandit 0 / kombu 3 / mashumaro 1,1.00,0/3,$0.118,21.8%,29 s
+"mid-size general model reviews each edit, edit and old code",cattrs 0 / bandit 0 / kombu 4 / mashumaro 1,1.25,0/3,$0.137,25.4%,31 s
+"decision model filter (score >= 0.5), then mid-size general model per edit",cattrs 0 / bandit 0 / kombu 1 / mashumaro 0,0.25,0/3,$0.023,4.1%,8 s
+"decision model filter (score >= 0.5 and old code < 0.5), then mid-size general model per edit",cattrs 0 / bandit 0 / kombu 1 / mashumaro 0,0.25,0/3,$0.006,1.0%,4 s
+one review of the finished patch by the mid-size general model,cattrs 5 / bandit 2 / kombu 1 / mashumaro 4,3.00,1/3 (cattrs detailed_validation),$0.092,18.9%,8 s
+one review of the finished patch by the large general model,cattrs 5 / bandit 4 / kombu 0 / mashumaro 0,2.25,"2/3 (bandit --warm-cache, cattrs detailed_validation)",$0.251,51.2%,42 s
+decision model scores the finished patch (probability it is fully correct),-,-,0/3 (no reasons; scores do not separate resolved from unresolved),$0.0015,<0.5%,0.5 s

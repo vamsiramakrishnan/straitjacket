@@ -1,0 +1,11 @@
+ordering,at_least_one_relevant_match_shown,relevant_share_of_shown_lines,relevant_file_recall
+search tool's own order,0.564,0.126,0.258
+files with most hits first,0.204,0.092,0.078
+non-test and shallower files first,0.593,0.099,0.288
+word-match score only,0.311,0.089,0.130
+"path rule, ties broken by word-match score",0.657,0.127,0.305
+"non-test files first, then word-match score",0.380,0.112,0.164
+"non-test first, then overlap of task words with path words",0.453,0.128,0.210
+"decision model, first 300 characters of task text",0.847,0.287,0.432
+"decision model, whole task text",0.865,0.357,0.519
+perfect order,1.000,0.451,0.658

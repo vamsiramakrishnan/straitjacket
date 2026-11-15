@@ -1,0 +1,16 @@
+share_of_session_cost,mean_pct,min_pct,max_pct
+search,1.1,0.07,3.08
+other_command_output,2.2,0.74,3.81
+file_views,6.0,2.91,10.59
+other_tool_results,0.81,0.0,4.28
+other,6.87,5.25,11.86
+system_prompt_and_task,15.87,14.55,19.13
+model_output_written,37.37,25.61,42.59
+model_output_reread,20.55,14.7,27.24
+model_output_cache_write,9.22,6.34,10.51
+model_output_and_reread,57.92,49.33,62.52
+model_output_all_three,67.15,55.99,72.96
+saved_by_cutting_search_to_40_lines,0.59,0.01,1.61
+saved_by_cutting_other_command_output_to_100_lines,0.36,0.0,1.63
+saved_by_cutting_file_views_to_100_lines,3.67,0.95,6.31
+saved_search_and_command_output,0.95,0.01,1.86

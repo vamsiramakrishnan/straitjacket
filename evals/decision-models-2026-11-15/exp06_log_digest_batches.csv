@@ -1,0 +1,11 @@
+batch,setup,sessions,correct,mean_turns,mean_input_tokens_thousands,mean_output_tokens,mean_seconds,mean_cost_usd,mean_follow_up_fetches,answered_with_no_follow_up,decisive_line_on_screen_before_first_follow_up
+1,earlier digest (before the evidence map),20,19,5.40,212,1555,13.2,0.0060,2.80,0,1
+1,digest with the evidence map,20,20,3.70,152,1177,10.3,0.0049,1.05,10,18
+1,"evidence map, decision model chooses excerpts",20,20,3.55,136,1100,10.1,0.0047,0.55,13,18
+1,"evidence map, chooser rigged to pick the least relevant",20,20,3.75,147,1144,9.8,0.0049,0.90,6,16
+2,earlier digest (before the evidence map),20,19,4.45,177,1295,11.1,0.0053,1.90,0,3
+2,digest with the evidence map,20,20,3.20,120,1035,8.9,0.0044,0.40,13,16
+2,"evidence map, decision model chooses excerpts",20,20,2.75,108,932,8.8,0.0042,0.30,15,20
+2,"evidence map, chooser rigged to pick the least relevant",20,20,2.75,106,857,7.8,0.0041,0.45,11,20
+3,earlier digest (before the evidence map),20,19,4.95,189,1410,12.3,0.0055,2.40,0,2
+3,digest with the evidence map,20,20,4.20,163,1345,11.6,0.0051,1.10,8,16

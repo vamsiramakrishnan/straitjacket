@@ -1,0 +1,6 @@
+reviewer,snippets_scored,bugs_caught,of_buggy,false_alarms_per_tests,of_correct,false_alarms_on_a_confirmed_latent_defect,auc,location_named_correctly_of_caught,median_api_latency,cost_per_snippet
+decision model,60,31,36,5,24,1,0.91,-,332 ms,$0.0001
+decision model (style question),60,30,36,6,24,,0.89,-,same call,same call
+small general model,60,34,36,13,24,4,0.93,29/34,3.3 s (wall 6.7 s),$0.0009
+mid-size general model,60,34,36,4,24,3,0.94,31/34,2.3 s (wall 6.1 s),$0.0110
+large general model,60,34,36,7,24,2,0.95,32/34,2.1 s (wall 5.9 s),$0.0211

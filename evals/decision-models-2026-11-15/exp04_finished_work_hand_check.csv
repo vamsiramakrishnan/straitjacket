@@ -1,0 +1,7 @@
+arrangement,flags_or_items,names_a_cause,fixed_later,real_defect,pre_existing,debatable,wrong,unchecked
+"mid-size general model per-edit, after-only",4,0,0,0,0,0,4,0
+"mid-size general model per-edit, before+after",5,0,0,0,0,0,5,0
+decision model plain gate 0.5 -> mid-size general model after-only,1,0,0,0,0,0,1,0
+decision model introduced gate 0.5 -> mid-size general model after-only,1,0,0,0,0,0,1,0
+end review mid-size general model,12,2,0,2,0,1,6,1
+end review large general model,9,2,0,3,0,3,1,0

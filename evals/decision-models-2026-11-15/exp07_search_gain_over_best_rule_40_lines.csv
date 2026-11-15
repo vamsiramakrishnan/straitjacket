@@ -1,0 +1,7 @@
+metric,decision_model_variant,best_simple_rule_for_this_metric,model_value,rule_value,difference_projects_weighted_equally,ci95_resampling_projects_rule_fixed,difference_all_searches_pooled,ci95_resampling_searches_rule_fixed,projects_won_tied_lost
+at least one relevant shown,"decision model, first 300 characters of task text","path rule, ties broken by word-match score",0.847,0.657,+0.191,"[-0.058, +0.413]",+0.327,"[+0.238, +0.415]",4/2/1
+at least one relevant shown,"decision model, whole task text","path rule, ties broken by word-match score",0.865,0.657,+0.209,"[-0.054, +0.432]",+0.388,"[+0.299, +0.469]",4/2/1
+relevant share of shown lines,"decision model, first 300 characters of task text","non-test first, then overlap of task words with path words",0.287,0.128,+0.159,"[+0.059, +0.276]",+0.126,"[+0.079, +0.172]",7/0/0
+relevant share of shown lines,"decision model, whole task text","non-test first, then overlap of task words with path words",0.357,0.128,+0.229,"[+0.109, +0.355]",+0.240,"[+0.190, +0.291]",7/0/0
+modified-file recall,"decision model, first 300 characters of task text","path rule, ties broken by word-match score",0.432,0.305,+0.127,"[-0.007, +0.265]",+0.209,"[+0.156, +0.262]",5/0/2
+modified-file recall,"decision model, whole task text","path rule, ties broken by word-match score",0.519,0.305,+0.214,"[+0.034, +0.385]",+0.339,"[+0.281, +0.400]",5/0/2

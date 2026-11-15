@@ -1,0 +1,11 @@
+flaw,positives_in_60_snippets,published 3B model,decision model,small general model,mid-size general model,large general model
+unclear_naming,10,0.80,0.82,0.90,0.95,0.95
+noise_comments,9,1.00,1.00,1.00,1.00,1.00
+dead_code,9,0.95,0.90,0.90,0.90,0.90
+inconsistent_style,5,1.00,0.91,1.00,0.83,0.83
+over_abstracted,8,0.89,0.67,0.94,1.00,1.00
+too_clever,10,0.95,0.67,0.95,1.00,0.95
+duplicated_logic,9,0.94,0.94,0.94,1.00,0.94
+error_handling_problem,7,0.86,0.86,0.82,0.86,0.86
+type_safety_hole,6,0.91,0.73,0.86,0.86,0.86
+unsafe_input,11,0.78,0.84,0.95,0.90,0.90

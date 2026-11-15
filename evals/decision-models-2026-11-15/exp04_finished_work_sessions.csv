@@ -1,0 +1,5 @@
+project,resolved,hidden_tests_passed,turns,cost,edit_or_write_calls,code_edits_seen_by_an_edit_hook,changed_code_files_never_touched_by_an_edit_tool,shell_commands_that_write_files
+cattrs,no,68/69,31,$0.30,3,1,2,5
+bandit,no,86/88,43,$0.59,3,1,7,18
+kombu,yes,85/85,60,$0.55,22,19,1,6
+mashumaro,yes,66/66,56,$0.56,19,17,1,9
