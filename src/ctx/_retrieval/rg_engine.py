@@ -4,9 +4,11 @@ CONTRIBUTING.md convention 1: opportunistic binary, deterministic fallback)."""
 
 from __future__ import annotations
 
+
 import re
 from dataclasses import dataclass
 
+from ctx.secretpaths import is_credential_file
 from ctx.sessiondir import LEDGER_DIR_NAME
 from ctx.textutil import fmt_bytes, fmt_int
 from ctx.workspace import Workspace
@@ -133,6 +135,8 @@ def _rg_repo_search(
             rel = path_obj["text"]
             if rel.startswith("./"):
                 rel = rel[2:]
+            if is_credential_file(rel):
+                continue  # the guard's credential list (any case; globs are not)
             matches.append(
                 RgMatch(
                     target=rel.replace("\\", "/"),

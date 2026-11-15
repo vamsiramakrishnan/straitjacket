@@ -19,6 +19,19 @@ def cmd_replay(ns) -> int:
         simulate_session,
     )
 
+    if getattr(ns, "replay_picker", False):
+        # Live ledgers, not transcripts: the evidence-map picker's records
+        # joined with later fetches of the same run handle (telemetry).
+        from ctx.digest.picker import picker_report, render_picker_report
+        from ctx.store import Store
+        from ctx.workspace import resolve_workspace
+
+        ws = resolve_workspace(getattr(ns, "workspace", None) or ".")
+        store = Store(ws.workspace_id, retention_days=ws.config.store.retention_days)
+        report = picker_report(ws.root, store.audit_dir / "telemetry.jsonl")
+        print(_json.dumps(report, indent=2, sort_keys=True) if ns.replay_json
+              else render_picker_report(report))
+        return 0
     paths = list(ns.transcripts)
     if ns.all_projects:
         paths += default_history_paths()

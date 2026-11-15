@@ -10,6 +10,7 @@ import json
 from dataclasses import dataclass
 from typing import Any
 
+from ctx.capture import CapMap
 from ctx.execution import snapshot_file
 from ctx.store import Store
 from ctx.textutil import index_lines, decode_exact, encode_exact, fmt_int, short_id
@@ -327,6 +328,7 @@ def _get(
     # for one on every immutable line span would be pure window tax.
     mutable = ref.kind == "repo"
 
+    capmap: CapMap | None = None  # a capped run stream (ctx.capture)
     fast_lines: tuple[str, int] | None = None  # (blob_hash, total_lines)
     fast_lines_raw = 0
     fast_bytes: tuple[str, int] | None = None  # (blob_hash, total_bytes)
@@ -362,6 +364,16 @@ def _get(
         blob_hash = str(meta["blob"]).removeprefix("sha256:")
         label = f"run:{short}#{stream}"
         is_octet_stream = str(meta["mediaType"]).startswith("application/octet-stream")
+        capmap = CapMap.of(meta)
+        if capmap is not None and (needs_full_scan or selector.symbol is not None
+                                   or selector.span is not None
+                                   or (is_octet_stream and selector.bytes is None)):
+            # Record numbers, JSON documents, anchors and symbols all need
+            # the whole stream; a capped one is missing its middle.
+            raise RetrievalError(
+                f"run:{short}#{stream} is a capped capture (its middle was not "
+                "stored: " + capmap.gap_text() + "); only --lines and --bytes "
+                "address it, in the original stream's numbering")
         if selector.span is not None:
             data = b""  # span resolution reads only what it needs
         elif not needs_full_scan and selector.bytes is not None:
@@ -456,7 +468,8 @@ def _get(
                 f"span {selector.span} does not belong to {label}; use the reference "
                 "the digest printed with it")
         result = _resolve_span(store, ws, ref_text, label, selector.span)
-        record_telemetry(store, "get", len(data) if data else 0, len(encode_exact(result)))
+        record_telemetry(store, "get", len(data) if data else 0, len(encode_exact(result)),
+                         ref=ref_text)
         return result
 
     if selector.symbol is not None:
@@ -537,7 +550,10 @@ def _get(
         body = "\n".join(rendered)
     elif selector.bytes is not None:
         a, b = selector.bytes
-        if fast_bytes is not None:
+        if fast_bytes is not None and capmap is not None:
+            a, b, body, continuation = _capped_bytes(
+                store, ws, ref_text, fast_bytes[0], capmap, a, b, budget, eff_rtok, header)
+        elif fast_bytes is not None:
             blob_hash_b, total_b = fast_bytes
             a, b = _window("bytes", a, b, total_b, "bytes")
             a, b, continuation = _byte_window(
@@ -562,7 +578,10 @@ def _get(
             body = edge_masked_bytes(lambda x, y: data[x:y], a - 1, b, len(data),
                                      ws.config.redaction, exact=True)
     else:
-        if fast_lines is not None:
+        if fast_lines is not None and capmap is not None:
+            body, continuation = _capped_lines(
+                store, ws, ref_text, fast_lines[0], capmap, selector, budget, eff_rtok, header)
+        elif fast_lines is not None:
             blob_hash, total = fast_lines
             a, b = selector.lines if selector.lines is not None else (1, total)
             if selector.lines is None:
@@ -734,8 +753,129 @@ def _get(
         raw_len = fast_bytes[1]
     else:
         raw_len = len(data)
-    record_telemetry(store, "get", raw_len, len(encode_exact(result)))
+    record_telemetry(store, "get", raw_len, len(encode_exact(result)), ref=ref_text)
     return result
+
+
+def _capped_note(cm: CapMap) -> str:
+    return (f"capture: capped · stored {cm.kept_text()} of {fmt_int(cm.total_lines)} "
+            f"lines; not stored: {cm.gap_text()}")
+
+
+def _capped_lines(store, ws, ref_text, blob_hash, cm: CapMap, selector, budget, eff_rtok,
+                  header: list[str]) -> tuple[str, str | None]:
+    """``--lines`` on a capped run stream, in the ORIGINAL stream's line
+    numbers. One stored segment (head or tail) per answer: a range that
+    starts in the dropped middle starts at the tail and says so; a range
+    that runs into it stops at the end of the head and continues at the
+    tail. A range wholly inside the middle is refused, never shown as
+    something else."""
+    total = cm.total_lines
+    if selector.lines is None:
+        a = 1 if cm.head_lines else cm.tail_first
+        b = a + budget.max_inline_lines - 1
+    else:
+        a, b = selector.lines
+    a, b = _window("lines", a, b, total, "lines")
+    header.append(_capped_note(cm))
+    gap_a, gap_b = cm.gap
+    if cm.blob_line(a) is None:
+        if not cm.tail_lines or b < cm.tail_first:
+            raise RetrievalError(
+                f"--lines {a}:{b} of {ref_text} lies in the dropped middle of a capped "
+                f"capture: {cm.gap_text()} were not stored. Stored: {cm.kept_text()}.")
+        header.append(f"note: lines {a}:{cm.tail_first - 1} were not stored; "
+                      f"showing from L{cm.tail_first}")
+        a = cm.tail_first
+    in_head = a <= cm.head_lines
+    continuation = None
+    seg_end = cm.head_lines if in_head else cm.last_line
+    if b > seg_end:
+        if in_head and cm.tail_lines and b >= cm.tail_first:
+            nxt = cm.tail_first
+            continuation = (f"ctx get {ref_text} --lines {nxt}:"
+                            f"{min(b, nxt + budget.max_inline_lines - 1)}")
+        if in_head and gap_b >= gap_a:
+            header.append(f"note: lines {gap_a}:{min(b, gap_b)} were not stored")
+        b = seg_end
+    if b - a + 1 > budget.max_inline_lines:
+        b = a + budget.max_inline_lines - 1
+        continuation = f"ctx get {ref_text} --lines {b + 1}:{min(total, b + budget.max_inline_lines)}"
+    blob_a = cm.blob_line(a, prefer_tail=not in_head)
+    blob_b = blob_a + (b - a)
+    idx = store.line_index(blob_hash)
+    all_lines = index_lines(edge_masked_bytes(
+        blob_reader(store, blob_hash), int(idx[blob_a - 1]), int(idx[blob_b]),
+        int(idx[-1]) if len(idx) else 0, ws.config.redaction))
+    rendered = anchors.render_window(all_lines, a, tagged=selector.hashlines)
+    b, fit_next = _fit_window(
+        "--lines", ref_text, a, b, total, rendered, budget, result_tokens=eff_rtok)
+    if fit_next:
+        continuation = fit_next
+        rendered = rendered[: b - a + 1]
+    header.insert(1, f"selector: --lines {a}:{b} of {fmt_int(total)}")
+    for note in _cut_line_notes(cm, a, b, in_head, ref_text):
+        header.append(note)
+    return "\n".join(rendered), continuation
+
+
+def _cut_line_notes(cm: CapMap, a: int, b: int, in_head: bool, ref_text: str) -> list[str]:
+    """Say so when a shown line is only part of an original line: the head
+    was cut inside its last line, or the tail starts inside its first."""
+    notes = []
+    h = cm.head_lines
+    if in_head and cm.added and a <= h <= b:
+        if cm.tail_lines and cm.tail_first == h:
+            notes.append(
+                f"note: L{h} was cut by the capture: shown up to byte {cm.head_bytes:,}; "
+                f"its end is stored from byte {cm.tail_start:,} (ctx get {ref_text} "
+                f"--bytes {cm.tail_start}:{cm.total_bytes}), and bytes "
+                f"{cm.head_bytes + 1:,}-{cm.tail_start - 1:,} of it were not stored")
+        else:
+            notes.append(f"note: L{h} was cut by the capture after byte {cm.head_bytes:,}; "
+                         "the rest of it was not stored")
+    if (not in_head and cm.tail_lines and not cm.c.get("tailStartsLine", True)
+            and a <= cm.tail_first <= b):
+        notes.append(f"note: L{cm.tail_first} is shown from byte {cm.tail_start:,} of the "
+                     "stream; its beginning was not stored")
+    return notes
+
+
+def _capped_bytes(store, ws, ref_text, blob_hash, cm: CapMap, a, b, budget, eff_rtok,
+                  header: list[str]):
+    """``--bytes`` on a capped run stream, in the original stream's byte
+    offsets; the same one-segment rule as :func:`_capped_lines`."""
+    total = cm.total_bytes
+    a, b = _window("bytes", a, b, total, "bytes")
+    header.append(_capped_note(cm))
+    if cm.orig_byte_to_blob(a) is None:
+        if not cm.tail_bytes or b < cm.tail_start:
+            raise RetrievalError(
+                f"--bytes {a}:{b} of {ref_text} lies in the dropped middle of a capped "
+                f"capture: bytes {cm.head_bytes + 1}:{cm.tail_start - 1} were not stored.")
+        header.append(f"note: bytes {a}:{cm.tail_start - 1} were not stored; "
+                      f"showing from byte {cm.tail_start}")
+        a = cm.tail_start
+    in_head = a <= cm.head_bytes
+    seg_end = cm.head_bytes if in_head else total
+    continuation = None
+    if b > seg_end:
+        if in_head and cm.tail_bytes and b >= cm.tail_start:
+            continuation = f"ctx get {ref_text} --bytes {cm.tail_start}:{b}"
+        if in_head:
+            header.append(f"note: bytes {seg_end + 1}:{min(b, cm.tail_start - 1)} "
+                          "were not stored")
+        b = seg_end
+    clipped = continuation is not None or b == seg_end < total
+    a, b, fit_next = _byte_window(ref_text, a, b, total, budget, result_tokens=eff_rtok)
+    if fit_next and (b < seg_end or not clipped):
+        continuation = fit_next
+    off = cm.orig_byte_to_blob(a) - a
+    stored = int(store.blob_path(store.resolve_id(blob_hash, kinds=("blob",))).stat().st_size)
+    body = edge_masked_bytes(blob_reader(store, blob_hash), a - 1 + off, b + off, stored,
+                             ws.config.redaction, exact=True)
+    header.insert(1, f"selector: --bytes {a}:{b} of {fmt_int(total)}")
+    return a, b, body, continuation
 
 
 def _python_symbol_span(source: str, dotted: str) -> tuple[int, int] | None:

@@ -185,7 +185,12 @@ row stating the current behaviour.
 ### "secret-bearing path … requires an explicit permission step"
 
 **Not a bug.** Reading a path that looks secret-bearing (`.env`, `.aws`, `.ssh`,
-`*.pem`, `*.key`, `id_rsa`, `credentials`, `secrets` …) always force-asks and is
+`*.pem`, `*.key`, `id_rsa`, `credentials`, `secrets`, and credential files by name:
+`.netrc`/`_netrc`, `.npmrc`, `.pypirc`, `.git-credentials`, `.docker/config.json`,
+`.kube/config`, `.config/gh/hosts.yml`, `.cargo/credentials`, `.gem/credentials`,
+`.terraformrc`/`terraform.rc`, `*.tfvars`, in any letter case and with a backup suffix, in
+your home or in a project, but not a template copy such as `.npmrc.example`) always
+force-asks and is
 excluded from automatic capture — even under permissive steering. **Fix:**
 confirm the prompt if you really intend it; there's no way to silence this by
 config, by design.
@@ -209,6 +214,64 @@ outside the workspace root. **Fix:** confirm the prompt, pass `--workspace` to
 widen the root, or set `[workspace] allow_outside_root = true` if this is
 routine for your setup.
 
+**One rule for every read.** This is a guard for paths that can be seen in the command
+text, not a sandbox: it judges what a command visibly names, and a command can still
+open files it does not name. The Read tool and the shell readers get the same decision
+for the same file. A shell reader is one of `cat`, `tac`, `head`, `tail`, `less`, `more`,
+`grep`/`egrep`/`fgrep`/`rg`/`ag`/`ack`, `awk`/`gawk`/`mawk`/`nawk`, `sed`, `strings`,
+`xxd`, `od`, `hexdump`, `diff`, `jq`, `yq`, `zcat`, `bzcat`, `xzcat`, `gzip -dc`, `bat`,
+`nl`, `fold`, `fmt`, `column`, `paste`, `comm`, `seq`, `sort`, `cut`, `uniq`, `base64`,
+`rev`, `expand` and `unexpand`; also `find … -exec`/`-execdir` running one of them
+(its starting points are judged as the places read) and `bash`/`sh`/`zsh -c '…'` (the
+script is judged part by part). For each path judged, in order: a secret-bearing path
+asks, also over every allow rule and in any part of a pipeline or chain (only a secret
+beats an allow rule); anything that is not a regular file or a directory (`/dev/zero`,
+`/dev/stdin`, a FIFO, a device) asks, except `/dev/null`, unless your rules allow the
+command (the capture cap then bounds what it prints); a file inside the workspace once links and `..` are resolved,
+named relatively or absolutely, keeps the reader's usual decision (captured, or run as
+typed); so does a file in a directory the host handed this session (Claude Code's own
+tool-results directory for this session, and the scratchpad the hook payload names when
+it is at least three levels deep and neither the workspace, the home directory nor
+above either); anything else (`/etc/hosts`, `~/notes.txt`, `/tmp/x.log`, a link that
+points out) is asked about on Claude Code and Antigravity and denied on Codex, which
+has no ask, unless your own rules allow the whole command: `[guard] allow_commands`, a
+Claude Code `Bash(...)` allow rule in `~/.claude/settings.json`,
+`.claude/settings.json` or `.claude/settings.local.json`, or an Antigravity allow rule
+in the forms Antigravity's rewrite check already honours (the whole line, `*`, a
+`regex:` rule, or a prefix of plain words such as `command(cat)`; `command(cat *)` is
+not one of them, so it does not withdraw the ask).
+It is never captured. A compound command gets the strictest answer over all its parts.
+
+The paths judged: each operand of the reader (its pattern or program operand and option
+values skipped); a `-f`/`--file` script or pattern file; an input redirect (`< f`) and
+`$(< f)` anywhere, also in quotes and here-strings; the reader's own literal operands in
+`find … -exec <reader> <operands> {} +`; each brace alternative; a glob's matches (a
+glob whose literal directory is outside the workspace is outside, whatever it matches;
+in the workspace up to 5,000 directory entries are checked, links resolved; past that
+bound the rest is not judged, but a secret name, a link out or a device seen before the
+bound still counts); literal variables and `for` lists assigned earlier in the same
+command (a `for` list may use such variables), `${v:-d}`, `${v:=d}`, `${v:+d}` with the
+shell's own rules when `v` is literal, and otherwise every literal path inside the
+expansion, nested ones too (`${a:-${b:-/etc/x}}`), `$HOME`/`${HOME}`/`~` (the account's home from the system, never a changed
+`$HOME`) and `$PWD`; relative paths after a literal `cd` in the same command (a `cd`
+inside `( … )`, `$( … )`, a pipeline or a background job `cd x &` ends there). The target of an output redirect
+(`> f`, `2> f`, `&> f`, `>& f`) is never a read. `sudo`, `doas`, `exec`, `builtin`, `!`,
+`nice`, `ionice`, `env`, `timeout` and their options never change the decision; under
+`sudo`/`doas` a path the caller cannot even inspect counts as outside.
+
+Not judged, so the decision is the one ctx gave before this rule: a path produced at run
+time (`$(…)`, backticks, a variable set from a command or by `read`, any other
+environment variable such as `$TMPDIR`, a `cd` to one of those), positional
+parameters and `set --` (`cat $1`, `cat "$@"`), shell functions (their arguments, and a
+`cd` before the call), `xargs <reader>` and `find -files0-from` (their file names arrive
+on standard input or from a file), files opened by interpreters and scripts (`python`,
+`node`, a shell script file), and the entries of a glob past the first 5,000. On
+Antigravity a reader whose path is produced at run time is captured, as before.
+
+The Read tool asks about a FIFO or device inside the workspace (it used to read it, and
+a FIFO may never end). The one other exception is the Read tool's own carve-out for
+Antigravity's MCP schema files.
+
 ### "unknown output bound for '`<prog>`'"
 
 **Cause:** under `guarded` mode, a command the classifier doesn't recognize is
@@ -222,8 +285,9 @@ Common read-only text tools (`nl`, `sort`, `cut`, `base64`, …) run on their ow
 captured like `cat` when they read workspace files. They still reach this prompt when
 they write a file or run a program (`sort -o`/`--out`, `uniq IN OUT`, `sort
 --compress-program`, `sort -T`), take operands from a file, are not the real tool
-(`./sort`, an environment prefix), name an input ctx cannot see before it runs (a glob
-or `~user`), or read outside the workspace or a device, symbolic links followed. A
+(`./sort`, an environment prefix), or name an input ctx cannot see before it runs (a
+glob or `~user`). A read outside the workspace or of a device gets the Read tool's
+answer instead (see "path resolves outside the active workspace" above). Otherwise a
 command with shell metacharacters (`<`, `$`, braces, pipes) keeps the verdict it had
 before these tools were named. `seq` without options is sized by its arguments: up to 400 lines it runs as
 is, up to a million it is captured, otherwise it asks.

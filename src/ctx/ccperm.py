@@ -384,8 +384,8 @@ def load_rules(root: str | None, cwd: str | None, argvs=None) -> dict:
 
     ``{"deny": [...], "ask": [...], "allow": [...] (proof-grade only),
     "unknown": bool, "reasons": [...]}``."""
-    rules = {"deny": [], "ask": [], "allow": [], "unknown": False, "reasons": [],
-             "block_outside": False}
+    rules = {"deny": [], "ask": [], "allow": [], "allow_any": [], "unknown": False,
+             "reasons": [], "block_outside": False}
     managed_only = False
     docs: list[tuple[dict, str]] = []
     for path, scope in _settings_files(root, cwd):
@@ -448,6 +448,11 @@ def load_rules(root: str | None, cwd: str | None, argvs=None) -> dict:
             if kind == "allow":
                 if scope == "managed" or (scope in ("user", "cli") and not managed_only):
                     rules["allow"].extend(good)
+                # Every layer the host honours (user, project, local: where
+                # "always allow" is written), for withdrawing ctx's own
+                # outside-workspace ask only -- never proof for an approval.
+                if scope == "managed" or not managed_only:
+                    rules["allow_any"].extend(good)
             else:
                 rules[kind].extend(good)
     return rules
@@ -617,7 +622,7 @@ def cached_rules(root: str | None, cwd: str | None) -> dict:
     load; a cache that cannot be written changes nothing."""
     import hashlib
 
-    h = hashlib.sha256()
+    h = hashlib.sha256(b"rules-v2:allow_any\0")  # the cached shape gained allow_any
     for path, scope in _settings_files(root, cwd):
         h.update(path.encode() + b"\0" + scope.encode() + b"\0")
         try:

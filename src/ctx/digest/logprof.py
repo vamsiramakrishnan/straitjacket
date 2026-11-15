@@ -224,6 +224,13 @@ class LogTemplateProfile(Profile):
         else:
             suggestions = [f"ctx search {rid} 'ERROR' 'WARN' --context 3"]
 
+        emap = self.evidence_map(ctx, above=body)
+        if emap is not None:
+            map_lines, map_next, r = emap
+            body.extend(map_lines)
+            shown += r.windows
+            suggestions = map_next + suggestions[1:]
+
         return "\n".join(
             ctx.header_lines() + body + self.coverage_lines(ctx, shown) + self.next_lines(ctx, suggestions)
         )

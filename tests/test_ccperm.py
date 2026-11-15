@@ -331,6 +331,13 @@ def test_ctx_prompts_exactly_where_the_host_does(tmp_path, monkeypatch, command,
         sys.stdin, sys.stdout = stdin, stdout
     hso = out.get("hookSpecificOutput", {})
     decision = hso.get("permissionDecision")
+    if decision == "ask":
+        # The Read rule for shell readers asks where the Read tool would (a
+        # file outside the workspace): only where the host asks anyway, so
+        # installing ctx still adds no prompt.
+        assert not host_runs and hso["permissionDecisionReason"].startswith(
+            "CTX_CONTEXT_GUARD: path resolves outside"), (command, out)
+        return
     assert decision in (None, "allow"), (command, out)
     if decision == "allow":
         assert host_runs, f"ctx approved {command!r}, which the host asks about"

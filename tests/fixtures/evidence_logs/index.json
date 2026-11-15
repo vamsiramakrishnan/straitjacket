@@ -1,0 +1,94 @@
+{
+ "note": "reduced copies of synthetic logs: head 70 + decisive lines +-15 + tail 25",
+ "items": [
+  {
+   "file": "build_cmake.log",
+   "question": "Why did the build fail?",
+   "answer_text": [
+    "/usr/bin/ld: libexport.a(pdf_writer.o): in function `emit_page':",
+    "pdf_writer.c:(.text+0x1a4): undefined reference to `font_table_load'",
+    "collect2: error: ld returned 1 exit status",
+    "make[1]: *** [CMakeFiles/app.dir/build.make:412: app] Error 1"
+   ]
+  },
+  {
+   "file": "pytest_run.log",
+   "question": "Which test really failed, and why?",
+   "answer_text": [
+    "tests/test_billing.py::test_invoice_total_rounding FAILED",
+    "    assert round_cents(Decimal('10.005')) == Decimal('10.01')",
+    "E   AssertionError: assert Decimal('10.00') == Decimal('10.01')",
+    "E    +  where Decimal('10.00') = round_cents(Decimal('10.005'))"
+   ]
+  },
+  {
+   "file": "server.log",
+   "question": "Why did the server stop accepting connections?",
+   "answer_text": [
+    "2025-02-11 09:09:42 FATAL [svc-a] accept4 failed: Too many open files (EMFILE), limit=1024",
+    "2025-02-11 09:09:42 FATAL [svc-a] listener closed; worker exiting with code 71"
+   ]
+  },
+  {
+   "file": "worker_traces.log",
+   "question": "What caused the ledger job to fail permanently?",
+   "answer_text": [
+    "2025-02-11 12:46:09 ERROR job-ledger unrecoverable: write failed",
+    "Traceback (most recent call last):",
+    "  File \"/work/app/ledger.py\", line 212, in commit",
+    "    fh.write(blob)",
+    "OSError: [Errno 28] No space left on device: '/work/app/data/ledger.db'"
+   ]
+  },
+  {
+   "file": "service.jsonl",
+   "question": "Why did the auth service refuse to start?",
+   "answer_text": [
+    "{\"ts\": 16013, \"level\": \"fatal\", \"svc\": \"auth\", \"msg\": \"token signing key not found\", \"key_id\": \"k-2024-11\", \"action\": \"abort startup\"}"
+   ]
+  },
+  {
+   "file": "webpack_build.log",
+   "question": "Which module could not be resolved and in which file?",
+   "answer_text": [
+    "ERROR in ./pages/checkout.js",
+    "Module not found: Error: Can't resolve './components/PaymentSummary' in '/work/app/src/pages'",
+    "  @ ./pages/checkout.js 14:0-52"
+   ]
+  },
+  {
+   "file": "migration.log",
+   "question": "Which migration failed and what data caused it?",
+   "answer_text": [
+    "2025-02-11 10:09:52 ERROR migration 0042_add_unique_email failed",
+    "ERROR:  could not create unique index \"users_email_key\"",
+    "DETAIL:  Key (email)=(dup@example.com) is duplicated."
+   ]
+  },
+  {
+   "file": "k8s_events.log",
+   "question": "Why is pod worker-z9 crash looping?",
+   "answer_text": [
+    "2025-02-11 09:07:31 Warning Failed     pod/worker-z9 container 'worker' terminated: reason=OOMKilled exitCode=137",
+    "2025-02-11 09:07:31 Warning BackOff    pod/worker-z9 back-off restarting failed container; memory limit 256Mi"
+   ]
+  },
+  {
+   "file": "integration_junit.log",
+   "question": "Which integration test failed and with what error?",
+   "answer_text": [
+    "[FAIL] it.export.ApiTest#uploadLargeFile",
+    "java.util.concurrent.TimeoutException: no response from storage mock within 30000ms",
+    "    at it.export.ApiTest.uploadLargeFile(ApiTest.java:118)"
+   ]
+  },
+  {
+   "file": "nightly_verify.log",
+   "question": "Why did the nightly verification abort?",
+   "answer_text": [
+    "2025-02-11 10:06:49 ERROR shard 17 checksum mismatch: expected 9f3a61c2 got 00000000 (block 4411)",
+    "2025-02-11 10:06:49 ERROR shard 17 no healthy replica holds block 4411; aborting nightly verify"
+   ]
+  }
+ ]
+}

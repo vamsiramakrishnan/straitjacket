@@ -6,6 +6,38 @@ with a minor bump per mechanism wave (see CONTRIBUTING.md).
 
 ## [Unreleased]
 
+- Well-known credential files are secret paths, through the Read tool and every shell
+  reader, at home or in a project: `.netrc`, `_netrc`, `.npmrc`, `.pypirc`,
+  `.git-credentials`, `.docker/config.json`, `.kube/config`, `.config/gh/hosts.yml`,
+  `.cargo/credentials`, `.gem/credentials`, `.terraformrc`, `terraform.rc` and `*.tfvars`,
+  in any letter case and with backup suffixes, not template copies (`.npmrc.example`,
+  `.sample`, `.template`, `.tmpl`);
+  `ctx get`/`ctx search` refuse the same list.
+  A new `bearer-token` redaction pattern blanks `Bearer <16+ token characters>`,
+  including a JWT too short for the `jwt` pattern.
+- Shell readers (`cat`, `head`, `tail`, `less`, `more`, `grep`, `awk`, `sed`, `sort`, `cut`
+  and the other read-only text tools) now get the Read tool's decision for the files they
+  open: a path outside the workspace (links and `..` resolved; devices, `/proc`,
+  `/dev/stdin`), a FIFO or device inside it, or a secret path asks on Claude Code and
+  Antigravity and is denied on Codex, under `sudo`/`doas` too, and is never captured. They
+  used to be captured or run as typed (`sudo cat /etc/shadow` was captured with no
+  question). A workspace file (named relatively or absolutely), the host's own
+  tool-results and scratchpad directories, a pipeline and an output redirect keep their
+  decision, as do your allow rules except for a secret path. Literal variables, `for`
+  lists, `cd`, globs and wrapper options are followed; an environment variable or a
+  substitution keeps its old decision; `$HOME`, `~`, `$PWD`, `${v:-default}`, `$(< f)`,
+  `bash -c` scripts, `find -exec <reader>` roots and globs (up to 5,000 entries) are
+  followed. A compound command gets its strictest part, and a secret in any part is
+  never withdrawn by an allow rule (Claude Code user, project and local settings,
+  Antigravity rules, `allow_commands`). The Read tool now asks about a FIFO or device in
+  the workspace. On Claude Code and Codex the command's working directory now resolves
+  relative paths.
+- `ctx run` (and background jobs) store at most `[store] max_capture_bytes` (64 MiB)
+  per output stream: past it a stream keeps its head and tail, the middle is dropped and
+  counted exactly, and the `capped/v1` digest says `captured X of Y bytes`. Retrieval
+  of a capped stream uses the original line numbers and refuses the dropped middle. A
+  command whose output passes 16 times the cap is stopped (`outputLimited`). A command
+  that never stopped printing used to fill the disk.
 - **BREAKING:** on Claude Code and Codex, shell commands are no longer rewritten or
   approved by default. If you upgrade, commands the hook used to approve silently now go
   through the host's own prompts, as they do without ctx. On Claude Code a hook `allow`

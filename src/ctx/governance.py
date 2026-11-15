@@ -518,12 +518,13 @@ def claude_post_matcher() -> str:
 #: ``edit-outcomes.jsonl``; when they occur: ``guard-failures.jsonl``,
 #: ``failure-available.json``, ``eval-adoption.jsonl``,
 #: ``records-adoption.jsonl``, ``collapse.jsonl``, ``route.jsonl``,
-#: ``plan-emissions.jsonl``, ``media/`` (image overviews), ``gate-fallback/``,
+#: ``plan-emissions.jsonl``, ``picker.jsonl`` (only with ``[picker] mode``
+#: shadow/model), ``media/`` (image overviews), ``gate-fallback/``,
 #: ``proxy/window.json``, ``relay/``, ``tasks/``, and ``store/`` only when
 #: the state directory is not writable.
 WORKSPACE_FOOTPRINT = (
     ".gitignore", "coverage.jsonl", "engagement.json", "<session>.count", "edit-outcomes.jsonl",
     "guard-failures.jsonl", "failure-available.json", "eval-adoption.jsonl",
     "records-adoption.jsonl", "collapse.jsonl", "route.jsonl", "plan-emissions.jsonl",
-    "media/", "gate-fallback/", "proxy/window.json", "relay/", "tasks/", "store/ (fallback)",
+    "picker.jsonl", "media/", "gate-fallback/", "proxy/window.json", "relay/", "tasks/", "store/ (fallback)",
 )

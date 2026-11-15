@@ -127,8 +127,21 @@ def stats(store: Store, ws: Workspace, ref_text: str, *, scope: str | None = Non
         out.append(
             f"result (exact): exit={r['exitCode']} signal={r['signal']} timedOut={r['timedOut']}"
         )
+        if r.get("outputLimited"):
+            out.append("result (exact): stopped at the runaway output limit")
         for name in ("stdout", "stderr"):
             meta = manifest["streams"][name]
+            from ctx.capture import CapMap
+
+            cm = CapMap.of(meta)
+            if cm is not None:
+                out.append(
+                    f"{name} (exact): capped · {fmt_int(cm.total_lines)} lines · "
+                    f"{fmt_int(cm.total_bytes)} bytes in all; stored {cm.kept_text()} "
+                    f"({fmt_int(cm.head_bytes + cm.tail_bytes)} bytes); not stored: "
+                    f"{cm.gap_text()} · {meta['mediaType']}"
+                )
+                continue
             out.append(
                 f"{name} (exact): {fmt_int(meta['lines'])} lines · {fmt_bytes(meta['bytes'])} "
                 f"· est {fmt_int(estimate_tokens(meta['bytes']))} tokens (approximate) · {meta['mediaType']}"

@@ -1,0 +1,955 @@
+"""Evidence map: exact accounting of the error-like lines a digest did not show.
+
+A digest that shows a few lines of a 9,000-line log asks the reader to trust
+whatever chose them. The map removes that trust: every *signal line* (a line
+:func:`ctx.digest.text._signal_rank` rates tier >= 1 -- error words, failure
+counts, exit codes, ``file:line`` coordinates; ANSI colour removed first) is
+grouped into a DISTINCT MESSAGE, and the digest states, exactly, how many
+signal lines and distinct messages there are, which messages it shows with
+context, which it lists, and how many it does not list -- with the command
+that lists those. A claim is printed only when the delivered bytes support it.
+
+Grouping (:func:`skeleton` then :func:`build`):
+
+* Masked unconditionally, because they are volatile by nature: timestamps
+  and dates, durations with a unit, long hex ids and memory addresses,
+  uuids, and pids/thread ids in the usual positions (``prog[123]``,
+  ``pid=123``, ``thread-7``).
+* Every other token that carries a digit, a quote, ``/``, ``@`` or ``=`` is
+  a *slot*. Lines with the same skeleton (words + slot positions) form a
+  group; within it a slot that takes at most ``FEW_VALUES`` distinct values,
+  some of them repeated (or a group of at most two lines), SPLITS the group (``exit code 1`` and ``exit code 137`` are two messages,
+  and the second ranks as rare), while a slot with more values (ids,
+  counters, row counts) stays collapsed and the message says so exactly:
+  ``varies: <value in the sample> (4,191 distinct values)``.
+
+Each message shows one verbatim sample (its first occurrence), which carries
+every split value. Ranking (:func:`local_order`): focus matches, higher tier,
+rarer, later last occurrence, earlier first occurrence, stderr first, key.
+
+Spending order: one list row per message, rare first, is reserved before any
+excerpt -- the list is what the guarantee rests on, context is a convenience.
+The top ``EXPAND_K`` messages are then expanded with ``EXCERPT_CONTEXT``
+lines either side (real line numbers; adjacent windows merge) only as far as
+that never pushes a message off the list. A message counts as *shown* when it
+is expanded or occurs once inside an excerpt; shown + listed + not listed
+always equals the number of distinct messages. Long lines are windowed
+around the signal and every cut is marked (``… +N chars``).
+
+Deterministic; every shown line is redacted (whole secrets replaced by their
+marker, private-key body lines replaced) BEFORE it is cut or measured.
+"""
+
+from __future__ import annotations
+
+import bisect
+import re
+from dataclasses import dataclass, field
+from typing import Any
+
+from ctx.digest.text import _signal_rank
+from ctx.textutil import EVIDENCE_LINE_CHARS, clip_redacting, fmt_int, index_lines
+
+EXPAND_K = 3
+EXCERPT_CONTEXT = 2
+EXCERPT_LINE_CHARS = EVIDENCE_LINE_CHARS
+LIST_SAMPLE_CHARS = 110
+#: A slot with at most this many distinct values splits its group.
+FEW_VALUES = 8
+MAP_VERSION = "evmap/v2"
+ACCOUNT_PREFIX = "evidence map (exact"
+
+# ---------------------------------------------------------------- ANSI
+_ANSI_RE = re.compile(r"\x1b\[[0-9;?]*[ -/]*[@-~]|\x9b[0-9;?]*[ -/]*[@-~]"
+                      r"|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)|\x1b[@-Z\\-_]")
+
+
+def strip_ansi(text: str) -> str:
+    """Remove 7-bit (ESC [) and 8-bit (CSI, U+009B) escape sequences."""
+    return _ANSI_RE.sub("", text) if ("\x1b" in text or "\x9b" in text) else text
+
+
+# ---------------------------------------------------------------- signal scan
+# Every alternative of every regex in _signal_rank needs one of these
+# (case-insensitively) or a coordinate shape. Used only as a SUPERSET filter
+# over ASCII text: each candidate is then ranked by _signal_rank itself, so the
+# result is exactly the per-line scan's, at a fraction of the cost (one C-level
+# find per keyword over the whole text instead of nine regexes per line).
+_KEYWORDS = (
+    "error", "fail", "exception", "traceback", "fatal", "panic", "denied",
+    "refused", "timeout", "timed out", "cannot", "unable", "critical",
+    "permission", "err!", "http/", "status", "exit", "code", "quota",
+    "oomkilled", "elifecycle",
+)
+_COORD_PREFILTER = re.compile(r'\.\w+:\d|file "|--> ')
+
+
+def _line_starts(text: str) -> list[int]:
+    starts = [0]
+    find = text.find
+    pos = find("\n")
+    while pos != -1:
+        starts.append(pos + 1)
+        pos = find("\n", pos + 1)
+    return starts
+
+
+def signal_rows(text: str, lines: list[str]) -> list[tuple[int, int]]:
+    """``(line_number, tier)`` of every line with ``_signal_rank >= 1``, in
+    line order. ``lines`` is ``index_lines(text)``."""
+    if not lines:
+        return []
+    if text.isascii():
+        starts = _line_starts(text)
+        low = text.lower()
+        cand: set[int] = set()
+        n = len(lines)
+        for kw in _KEYWORDS:
+            i = low.find(kw)
+            while i != -1:
+                li = bisect.bisect_right(starts, i) - 1
+                if li < n:
+                    cand.add(li)
+                nxt = starts[li + 1] if li + 1 < len(starts) else len(low)
+                i = low.find(kw, nxt)
+        for m in _COORD_PREFILTER.finditer(text):
+            li = bisect.bisect_right(starts, m.start()) - 1
+            if li < n:
+                cand.add(li)
+        order = sorted(cand)
+    else:
+        # Case folding can change lengths outside ASCII: rank every line.
+        order = range(len(lines))
+    out = []
+    for i in order:
+        r = _signal_rank(lines[i])
+        if r > 0:
+            out.append((i + 1, r))
+    return out
+
+
+# ---------------------------------------------------------------- skeletons
+_VOLATILE_RES = (
+    (re.compile(r"\b[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\b"), "<uuid>"),
+    (re.compile(r"\b\d{4}-\d{2}-\d{2}(?:[T ]\d{2}:\d{2}(?::\d{2}(?:[.,]\d+)?)?"
+                r"(?:Z|[+-]\d{2}:?\d{2})?)?\b"), "<ts>"),
+    (re.compile(r"\b\d{1,2}:\d{2}:\d{2}(?:[.,]\d+)?\b"), "<ts>"),
+    (re.compile(r"\b\d+(?:\.\d+)?(?:ns|us|µs|ms|s|sec|secs|m|min|h)\b"), "<dur>"),
+    (re.compile(r"\b0x[0-9a-fA-F]{4,}\b|\b(?=[0-9a-fA-F]*\d)[0-9a-fA-F]{8,}\b"), "<hex>"),
+    (re.compile(r"(?<=[A-Za-z_])\[\d+\](?=:)"), "[<pid>]"),
+    (re.compile(r"\b(?:pid|tid)([=: ])\d+\b", re.IGNORECASE), r"pid\1<pid>"),
+    (re.compile(r"\bthread[-_ ]?\d+\b", re.IGNORECASE), "thread-<tid>"),
+)
+_SLOT_RE = re.compile(r"[\d/'\"`@=]")
+#: Tokens: a quoted string (with any key= prefix and trailing punctuation) is
+#: ONE token, so `msg="quota exceeded"` and `msg="deadline exceeded"` are two
+#: values of one slot; a single quote opens a string only at a token start
+#: or after `=`, `:`, `(` or `[` (so "can't" stays a word).
+_TOKEN_RE = re.compile(
+    r"""[^\s"'`]*(?:"(?:[^"\\\n]|\\.){0,200}"|`(?:[^`\\\n]|\\.){0,200}`"""
+    r"""|(?:(?<=[=:(\[])|(?<!\S))'(?:[^'\\\n]|\\.){0,200}')\S*"""
+    r"""|\S+""")
+_PLACEHOLDERS = ("<ts>", "<dur>", "<hex>", "<uuid>", "pid=<pid>", "pid:<pid>", "[<pid>]", "<pid>",
+                 "<tid>")
+
+
+def skeleton(line: str) -> tuple[str, tuple[str, ...]]:
+    """(skeleton, slot values) of a (stripped) line."""
+    s = line.strip()
+    for rx, rep in _VOLATILE_RES:
+        s = rx.sub(rep, s)
+    out: list[str] = []
+    vals: list[str] = []
+    for tok in _TOKEN_RE.findall(s):
+        bare = tok
+        if "<" in tok:
+            for ph in _PLACEHOLDERS:
+                bare = bare.replace(ph, "")
+        if _SLOT_RE.search(bare):
+            out.append("<*>")
+            vals.append(tok)
+        else:
+            out.append(tok)
+    return " ".join(out), tuple(vals)
+
+
+def message_key(line: str) -> str:
+    """The skeleton key (slots unresolved). Kept for callers that only need
+    the coarse template; grouping uses :func:`build`."""
+    return skeleton(line)[0]
+
+
+# ---------------------------------------------------------------- the map
+@dataclass
+class Varies:
+    """A collapsed slot of one message: its position, and every value it
+    took with (count, first line)."""
+    slot: int
+    values: dict[str, list[int]]
+
+    @property
+    def distinct(self) -> int:
+        return len(self.values)
+
+
+@dataclass
+class Message:
+    stream: str
+    key: str
+    tier: int
+    count: int
+    first: int
+    last: int
+    focus: int = 0
+    #: collapsed slots that take more than one value in this message
+    varies: list[Varies] = field(default_factory=list)
+    skel: str = ""
+    #: split slot values (slot index -> value) that define the message
+    fixed: dict[int, str] = field(default_factory=dict)
+
+    def ref(self) -> str:
+        return f"{self.stream}:L{self.first}"
+
+
+@dataclass
+class EvidenceMap:
+    messages: list[Message]          # local order (see local_order)
+    signal_lines: int
+    partial: bool                    # a stream was cut at the parse cap
+    lines: dict[str, list[str]] = field(default_factory=dict)  # stream -> clean lines
+    pem: dict[str, list[tuple[int, int]]] = field(default_factory=dict)
+    parsed: dict[str, tuple[int, int]] = field(default_factory=dict)  # stream -> (parsed, total)
+    first_line: int = 1              # number of the first mapped line (spans)
+    #: stream -> a line longer than the parse cap, mapped only in its first part
+    long_lines: dict[str, int] = field(default_factory=dict)
+
+
+def _group(stream: str, rows: list[tuple[int, int, tuple[str, ...]]], skel: str,
+           lines: list[str], terms: tuple[str, ...], first_line: int) -> list[Message]:
+    nslots = len(rows[0][2])
+    split = []
+    count = len(rows)
+    for j in range(nslots):
+        seen: set[str] = set()
+        for _, _, vals in rows:
+            seen.add(vals[j])
+            if len(seen) > FEW_VALUES:
+                break
+        # Few values split the group -- unless every line has its own value
+        # (3+ lines, all different: an id or a counter, not a category).
+        split.append(len(seen) <= FEW_VALUES and (len(seen) < count or count <= 2))
+    msgs: dict[tuple[str, ...], list[Any]] = {}
+    coll_j = [j for j in range(nslots) if not split[j]]
+    for n, tier, vals in rows:
+        key = tuple(v for j, v in enumerate(vals) if split[j])
+        rec = msgs.get(key)
+        if rec is None:
+            rec = msgs[key] = [n, n, 0, tier, [{} for _ in coll_j], vals]
+        rec[1] = n
+        rec[2] += 1
+        rec[3] = max(rec[3], tier)
+        for c, j in enumerate(coll_j):
+            d = rec[4][c].get(vals[j])
+            if d is None:
+                rec[4][c][vals[j]] = [1, n]
+            else:
+                d[0] += 1
+    out = []
+    for key, (first, last, count, tier, dicts, sample_vals) in msgs.items():
+        low = lines[first - first_line].lower()
+        out.append(Message(
+            stream, skel + "\x00" + "\x00".join(key), tier, count, first, last,
+            sum(1 for t in terms if t in low),
+            # a slot constant within this message is not "varies"
+            [Varies(j, d) for j, d in zip(coll_j, dicts) if len(d) > 1],
+            skel, {j: v for j, v in enumerate(sample_vals) if split[j]}))
+    return out
+
+
+def build_streams(views: list[tuple[str, str, bool, int]], terms: tuple[str, ...] = (),
+                  first_line: int = 1) -> EvidenceMap | None:
+    """Map of ``(name, text, parsed_fully, total_lines)`` streams."""
+    from ctx.textutil import private_key_line_ranges
+
+    total = 0
+    partial = False
+    lines_by: dict[str, list[str]] = {}
+    pem: dict[str, list[tuple[int, int]]] = {}
+    parsed: dict[str, tuple[int, int]] = {}
+    long_lines: dict[str, int] = {}
+    messages: list[Message] = []
+    for name, raw, whole, nlines in views:
+        if not raw:
+            continue
+        if not whole and not raw.endswith("\n"):
+            head, sep, _tail = raw.rpartition("\n")
+            if sep:
+                # The parse cap fell inside a line: map only complete lines;
+                # the continuation starts at the cut line, from its start.
+                raw = head + sep
+            else:
+                # One line longer than the cap: its first part is mapped and
+                # the continuation starts at the next line (declared).
+                long_lines[name] = first_line
+        text = strip_ansi(raw)
+        lines = index_lines(text)
+        lines_by[name] = lines
+        pem[name] = [(a + first_line - 1, b + first_line - 1)
+                     for a, b in private_key_line_ranges(text)]
+        parsed[name] = (len(lines), max(nlines, len(lines)))
+        partial = partial or not whole
+        groups: dict[str, list[tuple[int, int, tuple[str, ...]]]] = {}
+        cache: dict[str, tuple[str, tuple[str, ...]]] = {}
+        for n, tier in signal_rows(text, lines):
+            total += 1
+            line = lines[n - 1]
+            sk = cache.get(line)
+            if sk is None:
+                sk = cache[line] = skeleton(line)
+            groups.setdefault(sk[0], []).append((n + first_line - 1, tier, sk[1]))
+        for skel, rows in groups.items():
+            messages.extend(_group(name, rows, skel, lines, terms, first_line))
+    if not messages:
+        return None
+    return EvidenceMap(local_order(messages), total, partial, lines_by, pem, parsed, first_line,
+                       long_lines)
+
+
+def build(ctx: Any) -> EvidenceMap | None:
+    """The map of ``ctx``'s streams, or None when they hold no signal line."""
+    terms = tuple(sorted(set(getattr(ctx, "focus_terms", ()) or ())))
+    views = [(v.name, v.text, v.parsed_fully, v.lines)
+             for v in (ctx.stderr, ctx.stdout) if v.bytes and v.text]
+    return build_streams(views, terms)
+
+
+def local_order(messages: list[Message]) -> list[Message]:
+    return sorted(messages, key=lambda m: (-m.focus, -m.tier, m.count, -m.last, m.first,
+                                           0 if m.stream == "stderr" else 1, m.key))
+
+
+def line_of(emap: EvidenceMap, stream: str, n: int) -> str:
+    """Line ``n`` of ``stream`` as it may be shown: ANSI removed, a
+    private-key body line replaced by the redaction marker."""
+    from ctx.textutil import PRIVATE_KEY_LINE
+
+    for a, b in emap.pem.get(stream, ()):
+        if a <= n <= b:
+            return PRIVATE_KEY_LINE
+    return emap.lines[stream][n - emap.first_line]
+
+
+def n_lines(emap: EvidenceMap, stream: str) -> int:
+    return len(emap.lines.get(stream, ())) + emap.first_line - 1
+
+
+# ---------------------------------------------------------------- rendering
+@dataclass
+class Rendered:
+    lines: list[str]
+    suggestions: list[str]
+    expanded: list[int]          # indices into emap.messages, pick order
+    shown: int
+    listed: int
+    unlisted: int
+    fired: set[str] = field(default_factory=set)
+    windows: int = 0
+    excerpt_lines: int = 0
+
+
+_SIGNAL_POS_RE = re.compile(
+    r"error|fail|exception|traceback|fatal|panic|denied|refused|timeout|timed out|cannot|unable"
+    r"|critical|permission|err!|exit|status|quota|oomkilled|\.\w+:\d", re.IGNORECASE)
+_WINDOW_LEAD = 40
+
+
+def _shown_line(text: str, width: int, fired: set[str]) -> str:
+    """The part of ``text`` that is shown, with every secret in it replaced
+    by its marker, fitted to ``width``.
+
+    The window is chosen first (the whole line if it fits, else the head, or
+    a window around the first signal word when that lies further in), and
+    redaction is then judged on exactly that window -- with the bounded
+    context :func:`ctx.textutil.secret_hits` reads around it -- so a secret
+    anywhere in a multi-megabyte line is masked if any of it is shown, at a
+    cost linear in the window, not the line. Every cut is marked
+    ``… +N chars`` (never with N = 0)."""
+    from ctx.textutil import mask_hits, secret_hits
+
+    n = len(text)
+    if n <= width:
+        a, end = 0, n
+    else:
+        m = _SIGNAL_POS_RE.search(text)
+        pos = m.start() if m else 0
+        a = max(0, pos - _WINDOW_LEAD)
+        if pos + 30 <= width or a == 0:
+            a = 0
+        end = min(n, a + width)
+    hits = secret_hits(text, a, end)
+    if hits:
+        fired.update(h.name for h in hits)
+        piece = mask_hits(text, a, end, hits)
+    else:
+        piece = text[a:end]
+    if len(piece) > width:              # a marker can be longer than its secret
+        piece = clip_redacting(piece, width)
+    return ((f"… +{a} chars " if a else "") + piece
+            + (f" … +{n - end} chars" if end < n else ""))
+
+
+def _windows(emap: EvidenceMap, picks: list[int], context: int) -> list[list[Any]]:
+    """[stream, start, end, [message indices]] in pick order; a pick whose
+    window overlaps or touches an earlier one in its stream joins it."""
+    wins: list[list[Any]] = []
+    for idx in picks:
+        m = emap.messages[idx]
+        lo, hi = emap.first_line, n_lines(emap, m.stream)
+        a, b = max(lo, m.first - context), min(hi, m.first + context)
+        for w in wins:
+            if w[0] == m.stream and a <= w[2] + 1 and b >= w[1] - 1:
+                w[1], w[2] = min(w[1], a), max(w[2], b)
+                w[3].append(idx)
+                break
+        else:
+            wins.append([m.stream, a, b, [idx]])
+    # A single-occurrence message already inside a window gets its own
+    # context too (one pass, not chained): a linker error two lines above the
+    # picked `make: *** Error 1` is part of the same story.
+    if context:
+        singles: dict[str, list[int]] = {}
+        for m in emap.messages:
+            if m.count == 1:
+                singles.setdefault(m.stream, []).append(m.first)
+        for w in wins:
+            lines_in = [n for n in singles.get(w[0], ()) if w[1] <= n <= w[2]]
+            if lines_in:
+                w[1] = max(emap.first_line, min(w[1], min(lines_in) - context))
+                w[2] = min(n_lines(emap, w[0]), max(w[2], max(lines_in) + context))
+    merged = True
+    while merged:
+        merged = False
+        for i in range(len(wins)):
+            for j in range(i + 1, len(wins)):
+                x, y = wins[i], wins[j]
+                if x[0] == y[0] and y[1] <= x[2] + 1 and y[2] >= x[1] - 1:
+                    x[1], x[2] = min(x[1], y[1]), max(x[2], y[2])
+                    x[3].extend(y[3])
+                    del wins[j]
+                    merged = True
+                    break
+            if merged:
+                break
+    return wins
+
+
+def _loc(stream: str, n: int) -> str:
+    return f"L{n}" if stream == "stdout" else f"{stream}:L{n}"
+
+
+#: rare values of a many-valued slot printed on the row, at most
+RARE_VALUES_SHOWN = 3
+_VALUE_CHARS = 32
+
+
+def _value(v: str, fired: set[str]) -> str:
+    return _shown_line(v, _VALUE_CHARS, fired)
+
+
+_NUM_STRIP = ",;:.)]}\"'"
+
+
+def num_value(v: str) -> float | None:
+    """The number a slot value is, ignoring surrounding punctuation, or None."""
+    t = v.strip(_NUM_STRIP).lstrip("([{\"'")
+    try:
+        return float(t) if t and t[-1].isdigit() else None
+    except ValueError:
+        return None
+
+
+def value_order(item: tuple[str, list[int]]) -> tuple:
+    """Least frequent first, then numeric values by number, then the rest by text."""
+    val, (count, _first) = item
+    n = num_value(val)
+    return (count, 0, n, "") if n is not None else (count, 1, 0.0, val)
+
+
+def _fmt_num(x: float) -> str:
+    return str(int(x)) if x == int(x) else repr(x)
+
+
+def _varies(m: Message, fired: set[str]) -> str:
+    """Every value of a few-valued collapsed slot with count and first line.
+    For a many-valued one: the count, the numeric range when every value is a
+    number, and the least frequent values (count ascending, then value) --
+    or, when every value has the same count, that fact instead. Commands
+    that list the values and the lines are printed separately."""
+    if not m.varies:
+        return ""
+    bits = []
+    for v in m.varies:
+        if v.distinct <= FEW_VALUES:
+            items = sorted(v.values.items(), key=lambda kv: kv[1][1])
+            bits.append(" · ".join(f"{_value(val, fired)} ×{fmt_int(c)} L{n}" for val, (c, n) in items))
+            continue
+        counts = {c for c, _ in v.values.values()}
+        text = f"{fmt_int(v.distinct)} distinct values"
+        if len(counts) == 1:
+            text += f", each ×{fmt_int(next(iter(counts)))}"
+        nums = [num_value(x) for x in v.values]
+        if all(n is not None for n in nums):
+            text += f" (numeric: min {_fmt_num(min(nums))} · max {_fmt_num(max(nums))})"
+        if len(counts) > 1:
+            items = sorted(v.values.items(), key=value_order)
+            shown = items[:RARE_VALUES_SHOWN]
+            text += "; least frequent: " + " · ".join(
+                f"{_value(val, fired)} ×{fmt_int(c)} L{n}" for val, (c, n) in shown)
+            text += f" (+{fmt_int(len(items) - len(shown))} more)"
+        bits.append(text)
+    return " · varies: " + "; ".join(bits)
+
+
+def _span_spec(m: Message, **extra: Any) -> str:
+    import json
+
+    return json.dumps({"sk": m.skel, "fixed": {str(k): v for k, v in sorted(m.fixed.items())},
+                       **extra}, sort_keys=True)
+
+
+def _lines_cmd(ctx: Any, m: Message, rid: str) -> str | None:
+    """The exact, bounded command that lists every line of message ``m``
+    (a ``message_lines`` span over the stored stream)."""
+    if not m.varies or not hasattr(ctx, "mint_span"):
+        return None
+    view = ctx.stderr if m.stream == "stderr" else ctx.stdout
+    sid = ctx.mint_span(view, "message_lines", template=_span_spec(m))
+    return f"ctx get {rid}#{m.stream} --span {sid}" if sid else None
+
+
+def _values_cmds(ctx: Any, m: Message, rid: str) -> list[str]:
+    """For each many-valued collapsed slot: the command that lists its
+    distinct values with counts and first lines, least frequent first,
+    ``VALUES_PAGE`` per call (a ``message_values`` span)."""
+    if not hasattr(ctx, "mint_span"):
+        return []
+    view = ctx.stderr if m.stream == "stderr" else ctx.stdout
+    out = []
+    for v in m.varies:
+        if v.distinct > FEW_VALUES:
+            sid = ctx.mint_span(view, "message_values", template=_span_spec(m, slot=v.slot))
+            if sid:
+                out.append(f"ctx get {rid}#{m.stream} --span {sid}")
+    return out
+
+
+def _size(rows: list[str]) -> int:
+    return sum(len(r.encode("utf-8")) + 1 for r in rows)
+
+
+def render(ctx: Any, emap: EvidenceMap, *, cap_bytes: int, rid: str = "run:PENDING",
+           order: list[int] | None = None, labels: dict[int, str] | None = None,
+           k: int = EXPAND_K, above: set[int] | None = None) -> Rendered:
+    """The map's digest lines. ``order`` is the expansion order (indices into
+    ``emap.messages``; default the local order); ``labels`` names who picked
+    each expanded message. The list is always in the local order, whoever
+    chose the excerpts, and excerpts never push a message off it."""
+    msgs = emap.messages
+    above = set(above or ())
+    order = [i for i in (range(len(msgs)) if order is None else order) if i not in above]
+    labels = labels or {}
+    fired: set[str] = set()
+    cap = max(200, int(cap_bytes))
+
+    row_text: dict[int, str] = {}
+
+    def row(i: int) -> str:
+        r = row_text.get(i)
+        if r is None:
+            m = msgs[i]
+            span = (f"first {_loc(m.stream, m.first)}  last {_loc(m.stream, m.last)}"
+                    if m.count > 1 else _loc(m.stream, m.first))
+            r = (f"    ×{fmt_int(m.count)}  {span}  "
+                 f"{_shown_line(line_of(emap, m.stream, m.first).strip(), LIST_SAMPLE_CHARS, fired)}"
+                 f"{_varies(m, fired)}")
+            if any(v.distinct > FEW_VALUES for v in m.varies):
+                for cmd in _values_cmds(ctx, m, rid):
+                    r += f" · its values: {cmd}"
+                cmd = _lines_cmd(ctx, m, rid)
+                if cmd:
+                    r += f" · all its lines: {cmd}"
+            row_text[i] = r
+        return r
+
+    def fit_rows(exclude: set[int], room: int) -> tuple[list[int], int]:
+        used = 0
+        out: list[int] = []
+        for i in range(len(msgs)):        # local order: rare first
+            if i in exclude:
+                continue
+            b = len(row(i).encode("utf-8")) + 1
+            if used + b > room:
+                break
+            out.append(i)
+            used += b
+        return out, used
+
+    def excerpt_block(picks: list[int], context: int) -> tuple[list[str], set[int], int, int]:
+        wins = _windows(emap, picks, context)
+        shown = set(picks)
+        out: list[str] = []
+        for stream, a, b, members in wins:
+            for i, m in enumerate(msgs):
+                if m.count == 1 and m.stream == stream and a <= m.first <= b and i not in above:
+                    shown.add(i)
+            head = f"  {stream} L{a}-L{b}"
+            cmds: list[str] = []
+            for idx in members:
+                m = msgs[idx]
+                bits = []
+                if m.count > 1:
+                    bit = (f"L{m.first} recurs ×{fmt_int(m.count)}, last L{m.last}"
+                           + _varies(m, fired).replace(" · varies:", ", varies:"))
+                    if any(v.distinct > FEW_VALUES for v in m.varies):
+                        for cmd in _values_cmds(ctx, m, rid):
+                            cmds.append(f"    values of L{m.first}: {cmd}")
+                        cmd = _lines_cmd(ctx, m, rid)
+                        if cmd:
+                            cmds.append(f"    all lines of L{m.first}: {cmd}")
+                    bits.append(bit)
+                if idx in labels:
+                    bits.append(f"L{m.first} picked by {labels[idx]}")
+                if bits:
+                    head += " · " + " · ".join(bits)
+            out.append(head + ":")
+            out.extend(cmds)
+            for n in range(a, b + 1):
+                out.append(f"    L{n}: {_shown_line(line_of(emap, stream, n), EXCERPT_LINE_CHARS, fired)}")
+        return out, shown, len(wins), sum(w[2] - w[1] + 1 for w in wins)
+
+    # 1. the list first: as many rows as fit, rare first
+    base_listed, _ = fit_rows(set(above), cap)
+    base_set = set(base_listed)
+    # 2. excerpts with what is left, never dropping a row from (1)
+    block: list[str] = []
+    shown: set[int] = set()
+    listed = base_listed
+    windows = excerpt_n = 0
+    picks: list[int] = []
+    done = False
+    for j in range(min(k, len(order)), 0, -1):
+        for context in (EXCERPT_CONTEXT, 1, 0):
+            cand = order[:j]
+            blk, shw, nw, nl = excerpt_block(cand, context)
+            room = cap - _size(blk)
+            if room < 0:
+                continue
+            lst, _ = fit_rows(shw | above, room)
+            if (base_set - shw) <= set(lst):
+                block, shown, listed, windows, excerpt_n, picks = blk, shw, lst, nw, nl, cand
+                done = True
+                break
+        if done:
+            break
+
+    total = len(msgs)
+    unlisted = total - len(above) - len(shown) - len(listed)
+    if emap.partial:
+        spans = [f"{s} lines {emap.first_line}-{p + emap.first_line - 1} of {fmt_int(t)}"
+                 for s, (p, t) in sorted(emap.parsed.items())]
+        scope = " for " + ", ".join(spans) + "; later lines are not in this map"
+    else:
+        scope = ""
+    out = [
+        f"{ACCOUNT_PREFIX}{scope}): {fmt_int(emap.signal_lines)} error-like lines · "
+        f"{fmt_int(total)} distinct messages · "
+        + (f"{fmt_int(len(above))} shown above ({_above_refs(emap, above)}) · " if above else "")
+        + f"{fmt_int(len(shown))} shown with context · "
+        f"{fmt_int(len(listed))} listed · {fmt_int(unlisted)} not listed",
+    ]
+    if block:
+        out.append("  excerpts (verbatim except control characters; real line numbers):")
+        out.extend(block)
+    if listed:
+        out.append("  other messages (×count · lines · first sample):")
+        out.extend(row(i) for i in listed)
+    suggestions: list[str] = []
+    top_varied = next((i for i in range(len(msgs)) if (i in shown or i in listed)
+                       and any(v.distinct > FEW_VALUES for v in msgs[i].varies)), None)
+    if top_varied is not None:
+        suggestions.extend(_values_cmds(ctx, msgs[top_varied], rid)[:1])
+    if listed:
+        m = msgs[listed[0]]
+        suggestions.append(
+            f"ctx get {rid}#{m.stream} --lines {max(1, m.first - EXCERPT_CONTEXT)}:"
+            f"{min(n_lines(emap, m.stream), m.first + EXCERPT_CONTEXT)}")
+    if unlisted == 0 and not emap.partial:
+        varies = any(msgs[i].varies for i in range(total))
+        what = (f"one of these {fmt_int(total)} messages" if total > 1 else "this one message")
+        out.append(f"  every error-like line is {what}"
+                   + ("; a message marked varies stands for several values, shown on its line "
+                      "or listed by its command." if varies else "."))
+    if unlisted:
+        cmds = []
+        for stream in ("stderr", "stdout"):
+            if not any(msgs[i].stream == stream for i in range(total)
+                       if i not in shown and i not in listed):
+                continue
+            view = ctx.stderr if stream == "stderr" else ctx.stdout
+            in_stream = sum(1 for m in msgs if m.stream == stream)
+            sid = (ctx.mint_span(view, "messages", a=1, b=in_stream)
+                   if hasattr(ctx, "mint_span") else None)
+            if sid:
+                cmds.append(f"ctx get {rid}#{stream} --span {sid}")
+        line = f"  +{fmt_int(unlisted)} distinct messages not listed"
+        if cmds:
+            line += ": " + "  ·  ".join(cmds)
+            suggestions.extend(cmds)
+        out.append(line)
+    if emap.partial:
+        cmds = []
+        for stream, (p, t) in sorted(emap.parsed.items()):
+            if t > p and hasattr(ctx, "mint_span"):
+                view = ctx.stderr if stream == "stderr" else ctx.stdout
+                sid = ctx.mint_span(view, "messages_from", a=p + 1, b=1)
+                if sid:
+                    cmds.append(f"ctx get {rid}#{stream} --span {sid}")
+        line = "  lines past the parse cap are not mapped"
+        for stream, n in sorted(emap.long_lines.items()):
+            line += f" (and {stream} L{n} is longer than the cap: only its first part is mapped)"
+        if cmds:
+            line += "; map them: " + "  ·  ".join(cmds)
+            suggestions.extend(cmds)
+        out.append(line)
+    return Rendered(out, suggestions, list(picks), len(shown), len(listed), unlisted, fired,
+                    windows, excerpt_n)
+
+
+# ---------------------------------------------------------------- profiles
+_BODY_LINE_RE = re.compile(r"(?:^|\s)(?:(stdout|stderr):)?L(\d+): (.*)$")
+
+
+def _message_lines_of(m: Message) -> list[int]:
+    """The line numbers of a message's occurrences when they are known from
+    the map alone (it occurs at most twice: first and last)."""
+    if m.count == 1:
+        return [m.first]
+    if m.count == 2:
+        return [m.first, m.last]
+    return []
+
+
+def shown_above(emap: EvidenceMap, body: list[str] | None) -> set[int]:
+    """Indices of messages whose every line the profile body already prints
+    verbatim, with its real line number (``L<n>: <the line>``, same stream).
+    Such a message gets no excerpt and no list row: the map adds only what
+    the body does not show."""
+    if not body:
+        return set()
+    seen: dict[tuple[str, int], str] = {}
+    for ln in body:
+        m = _BODY_LINE_RE.search(ln)
+        if m:
+            seen[(m.group(1) or "stdout", int(m.group(2)))] = m.group(3).strip()
+    out = set()
+    if not seen:
+        return out
+    for i, msg in enumerate(emap.messages):
+        nums = _message_lines_of(msg)
+        if nums and all(seen.get((msg.stream, n)) == line_of(emap, msg.stream, n).strip()
+                        for n in nums):
+            out.add(i)
+    return out
+
+
+def _above_refs(emap: EvidenceMap, above: set[int]) -> str:
+    refs = sorted({(emap.messages[i].stream, n) for i in above
+                   for n in _message_lines_of(emap.messages[i])}, key=lambda t: (t[0], t[1]))
+    return ", ".join(_loc(st, n) for st, n in refs)
+
+
+def section(ctx: Any, above_body: list[str] | None = None
+            ) -> tuple[list[str], list[str], Rendered] | None:
+    """The evidence map for a profile's digest: (lines, next-step
+    suggestions, render), or None when the whole output fits inline (the
+    profile can show everything) or no line is a signal line. Runs the
+    configured picker when the caller enabled one (``ctx.picker``)."""
+    ws = getattr(ctx, "ws", None)
+    budgets = getattr(getattr(ws, "config", None), "budgets", None)
+    if budgets is None:
+        return None
+    content = ctx.stdout.bytes + ctx.stderr.bytes
+    if content <= budgets.result_tokens * 3:
+        return None
+    emap = build(ctx)
+    if emap is None:
+        return None
+    above = shown_above(emap, above_body)
+    if len(above) == len(emap.messages):
+        # Every error-like line is already printed verbatim by the profile
+        # body: the map would add nothing, so it adds no bytes either.
+        return None
+    order = labels = None
+    picker = getattr(ctx, "picker", None)
+    if picker is not None:
+        try:
+            order, labels = picker.choose(emap, EXPAND_K)
+        except Exception:  # noqa: BLE001 -- the local map is always the fallback
+            order = labels = None
+    r = render(ctx, emap, cap_bytes=map_cap(budgets), order=order, labels=labels, above=above)
+    fired = getattr(ctx, "evmap_fired", None)
+    if isinstance(fired, set):
+        fired.update(r.fired)
+    return r.lines, r.suggestions, r
+
+
+def map_cap(budgets: Any) -> int:
+    """``[budgets] evidence_map_bytes``, clamped to 400..8000."""
+    try:
+        v = int(getattr(budgets, "evidence_map_bytes", 1500))
+    except (TypeError, ValueError):
+        v = 1500
+    return max(400, min(v, 8000))
+
+
+def budget_tokens(ws: Any, digest: str) -> int:
+    """Extra emission-budget tokens for a digest that carries an evidence
+    map: exactly the map section's own size (at most its cap plus its
+    accounting and closing lines), so the backstop that bounds the rest of
+    the digest never cuts the map. Not multiplied by the failure factor."""
+    sec = map_section(digest)
+    if sec is None:
+        return 0
+    _, a, b = sec
+    lines = digest.split("\n")
+    return (len("\n".join(lines[a:b]).encode("utf-8")) + 4) // 4
+
+
+# ---------------------------------------------------------------- delivery
+_ACCOUNT_RE = re.compile(
+    r"^evidence map \(exact[^)]*\): [\d,]+ error-like lines · ([\d,]+) distinct messages · "
+    r"(?:([\d,]+) shown above \(([^)]*)\) · )?"
+    r"([\d,]+) shown with context · ([\d,]+) listed · ([\d,]+) not listed$")
+
+
+def map_section(text: str) -> tuple[list[str], int, int] | None:
+    """(lines, start, end) of the map inside ``text`` (end exclusive)."""
+    lines = text.split("\n")
+    for i, ln in enumerate(lines):
+        if ln.startswith(ACCOUNT_PREFIX):
+            j = i + 1
+            while j < len(lines) and lines[j].startswith("  "):
+                j += 1
+            return lines, i, j
+    return None
+
+
+def map_supported(text: str) -> bool:
+    """Does ``text`` -- what the reader receives -- support every claim its
+    evidence map makes? True when there is no map. Checks: the accounting
+    adds up, every listed row is present, a non-zero "not listed" count has
+    its line, and the closing sentence appears only when nothing is
+    unlisted and the parse was whole."""
+    sec = map_section(text)
+    if sec is None:
+        return True
+    lines, a, b = sec
+    m = _ACCOUNT_RE.match(lines[a])
+    if not m:
+        return False
+    total, above_n, refs, shown, listed, unlisted = m.groups()
+    total, shown, listed, unlisted = (int(g.replace(",", "")) for g in (total, shown, listed, unlisted))
+    above_n = int(above_n.replace(",", "")) if above_n else 0
+    if above_n + shown + listed + unlisted != total:
+        return False
+    if refs:
+        # "shown above" is true only if those lines are really above the map
+        pre = lines[:a]
+        for ref in refs.split(", "):
+            mm = re.fullmatch(r"(?:(stdout|stderr):)?L(\d+)", ref.strip())
+            if not mm:
+                return False
+            st, n = mm.group(1) or "stdout", mm.group(2)
+            pat = re.compile(rf"(?:^|\s){'(?:stdout:)?' if st == 'stdout' else st + ':'}L{n}: ")
+            if not any(pat.search(ln) for ln in pre):
+                return False
+    body = lines[a + 1:b]
+    rows = sum(1 for ln in body if ln.startswith("    ×"))
+    closing = any(ln.startswith("  every error-like line is ") for ln in body)
+    notlisted = any(re.match(r"^  \+[\d,]+ distinct messages not listed", ln) for ln in body)
+    if rows != listed:
+        return False
+    if unlisted and not notlisted:
+        return False
+    if closing and (unlisted or "later lines are not in this map" in lines[a]):
+        return False
+    if not unlisted and "later lines are not in this map" not in lines[a] and not closing:
+        return False
+    return True
+
+
+def fit_digest(text: str, budget_tokens_: int, reserve_bytes: int = 0) -> str:
+    """``text`` within ``budget_tokens_`` with its evidence map whole: what
+    must give way is the profile body above the map (cut from its bottom,
+    with a marker) and then the lines below it. The map is never cut; a
+    map that does not fit even alone is removed whole, with one line saying
+    so, rather than delivered with claims its bytes no longer support."""
+    from ctx import bounds as _bounds
+
+    budget = _bounds.budget_bytes(budget_tokens_)
+    if len(text.encode("utf-8")) <= budget:
+        return text
+    budget = max(0, budget - reserve_bytes)
+    sec = map_section(text)
+    if sec is None:
+        return text
+    lines, a, b = sec
+    pre, mp, post = lines[:a], lines[a:b], lines[b:]
+    marker = "[ctx:truncated profile summary to fit; the evidence map below is whole]"
+    need = _size(pre[:1]) + _size([marker]) + _size(mp)
+    if need > budget:
+        handle = re.search(r"\[ctx run:([0-9a-f]+|PENDING)", text)
+        note = "evidence map omitted: budget"
+        if handle:
+            note += f"; ctx get run:{handle.group(1)}#stdout --lines 1:40 to start reading"
+        # right under the header line, so a later cut cannot remove it
+        return "\n".join(pre[:1] + [note] + pre[1:] + post)
+    keep = 1
+    while keep < len(pre) and _size(pre[:keep + 1]) + _size([marker]) + _size(mp) <= budget:
+        keep += 1
+    out = pre[:keep] + ([marker] if keep < len(pre) else []) + mp
+    for ln in post:
+        if _size(out + [ln]) > budget:
+            break
+        out.append(ln)
+    return "\n".join(out)
+
+
+def drop_map(text: str) -> str:
+    """``text`` without its evidence map (the last resort of delivery)."""
+    sec = map_section(text)
+    if sec is None:
+        return text
+    lines, a, b = sec
+    return "\n".join(lines[:1] + ["evidence map omitted: budget"] + lines[1:a] + lines[b:])
+
+
+def deliver(text: str, budget: int, continuation: str | None = None,
+            truncation_continuation: str | None = None) -> str:
+    """The emission backstop for a digest that may carry a map: fit it map
+    first (:func:`fit_digest`), bound it, then check that the delivered
+    bytes support every claim the map makes; if they do not, deliver the
+    digest without the map instead."""
+    from ctx.textutil import bounded
+
+    tail = f"\nnext: {truncation_continuation}" if truncation_continuation else ""
+    fitted = fit_digest(text, budget, len(tail.encode("utf-8")))
+    if fitted != text and map_section(fitted) is not None:
+        # Cut around a whole map: the cut is declared by fit_digest's marker
+        # and the reader still gets the retrieval handle.
+        fitted += tail
+    out = bounded(fitted, budget, continuation, truncation_continuation=truncation_continuation)
+    if map_supported(out):
+        return out
+    return bounded(drop_map(fitted), budget, continuation,
+                   truncation_continuation=truncation_continuation)

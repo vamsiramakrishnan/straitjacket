@@ -15,6 +15,7 @@ from pathlib import Path
 from typing import Any
 
 from ctx._proc import exit_status, wait_or_kill
+from ctx.capture import capture_process, command_cap
 from ctx.gitstatus import changed_paths
 from ctx.sessiondir import LEDGER_DIR_NAME
 from ctx.store import Store
@@ -44,7 +45,9 @@ def _count_lines(path: Path) -> int:
     return lines
 
 
-def stream_entries(store: Store, paths: dict[str, Path]) -> dict[str, dict[str, Any]]:
+def stream_entries(
+    store: Store, paths: dict[str, Path], capture: dict[str, Any] | None = None
+) -> dict[str, dict[str, Any]]:
     """Spool files → the manifest's ``streams`` block (R7).
 
     Content-addresses each spool and describes it: blob ref, byte and line
@@ -56,6 +59,12 @@ def stream_entries(store: Store, paths: dict[str, Path]) -> dict[str, dict[str, 
     An empty stream is reported as ``text/plain`` + ``utf-8`` rather than
     whatever :func:`ctx.textutil.decode_stream` says about zero bytes, so a
     command that wrote nothing to stderr does not acquire a media type.
+
+    ``capture`` maps a stream name to its :class:`ctx.capture.CappedSpool`
+    block when that stream passed the cap. The block is recorded only then,
+    so a capture under the cap keeps its manifest byte for byte. ``bytes``
+    and ``lines`` always describe the stored blob; the block carries the
+    whole stream's exact counts and where the dropped middle was.
     """
     streams: dict[str, dict[str, Any]] = {}
     for name, path in paths.items():
@@ -70,6 +79,9 @@ def stream_entries(store: Store, paths: dict[str, Path]) -> dict[str, dict[str, 
             "mediaType": media_type if size else "text/plain",
             "encoding": encoding if size else "utf-8",
         }
+        block = (capture or {}).get(name)
+        if block:
+            streams[name]["capture"] = dict(block)
     return streams
 
 
@@ -248,39 +260,40 @@ def run_capture(
         was_cancelled = bool(cancelled())
         return was_cancelled
 
+    def wait(proc):
+        if cancelled is not None:
+            return wait_or_kill(proc, timeout, cancelled=stop_requested)
+        return wait_or_kill(proc, timeout)
+
     try:
         in_fh = in_path.open("rb") if in_path is not None else None
         try:
-            with out_path.open("wb") as out_fh, err_path.open("wb") as err_fh:
-                try:
-                    proc = subprocess.Popen(
-                        popen_args,
-                        cwd=workdir,
-                        shell=popen_shell,
-                        stdout=out_fh,
-                        stderr=err_fh,
-                        stdin=in_fh if in_fh is not None else subprocess.DEVNULL,
-                        start_new_session=True,
-                        env=child_env,
-                    )
-                except FileNotFoundError as e:
-                    raise ExecutionError(f"command not found: {argv[0]}") from e
-                finally:
-                    if in_fh is not None:
-                        in_fh.close()
-                        in_fh = None
-                if cancelled is not None:
-                    timed_out = wait_or_kill(proc, timeout, cancelled=stop_requested)
-                else:
-                    timed_out = wait_or_kill(proc, timeout)
+            try:
+                # Both streams go through capped spools (ctx.capture): at
+                # most [store] max_capture_bytes is stored per command.
+                outcome = capture_process(
+                    popen_args,
+                    out_path=out_path,
+                    err_path=err_path,
+                    cap_bytes=command_cap(ws.config.store.max_capture_bytes),
+                    wait=wait,
+                    cwd=workdir,
+                    shell=popen_shell,
+                    stdin=in_fh if in_fh is not None else subprocess.DEVNULL,
+                    start_new_session=True,
+                    env=child_env,
+                )
+            except FileNotFoundError as e:
+                raise ExecutionError(f"command not found: {argv[0]}") from e
         finally:
-            # in_fh stayed open if the stdout/stderr spool `with` failed before
-            # the inner try ever ran (e.g. out_path.open raising) -- close it here too.
             if in_fh is not None:
                 in_fh.close()
+        proc = outcome["proc"]
+        timed_out = outcome["waited"]
 
         exit_code, sig_name = exit_status(proc.returncode)
-        streams = stream_entries(store, {"stdout": out_path, "stderr": err_path})
+        streams = stream_entries(store, {"stdout": out_path, "stderr": err_path},
+                                 capture=outcome["capture"])
     finally:
         for p in (out_path, err_path) + ((in_path,) if in_path is not None else ()):
             try:
@@ -304,6 +317,8 @@ def run_capture(
     )
     if was_cancelled:
         manifest["result"]["cancelled"] = True
+    if outcome["outputLimited"]:
+        manifest["result"]["outputLimited"] = True
     manifest_id = store.put_manifest(manifest, kind="run")
     manifest["id"] = f"sha256:{manifest_id}"
     return CaptureResult(manifest_id=manifest_id, manifest=manifest)

@@ -69,6 +69,10 @@ WORKSPACE_EXCLUDES = (
 # Dockerfile RUN steps that build the image's git time-travel or assert its
 # cleanliness. The checkout is materialized by this adapter instead.
 _SKIP_RUN = ("git clone", "git status --porcelain", "core.hooksPath")
+# A cleanliness assertion chained after real install work (`pip install x &&
+# ... && test -z "$(git status --porcelain)"`) is cut off the end; the work
+# before it still has to run.
+_TRAILING_CLEAN_CHECK = re.compile(r'\s*&&\s*test -z "\$\(git status --porcelain\)"\s*$')
 
 
 # --------------------------------------------------------------------- corpus
@@ -205,17 +209,25 @@ def _rewrite_paths(text: str, mapping: dict[str, str]) -> str:
 
 
 def _dockerfile_steps(dockerfile: pathlib.Path) -> tuple[dict[str, str], list[str]]:
-    """(ENV/ARG assignments, RUN commands) in order, continuations joined."""
+    """(ENV/ARG assignments, RUN commands) in order, continuations joined.
+
+    Joined the way Docker does: a trailing backslash and its newline are
+    deleted, and comment or blank lines inside a continued instruction are
+    dropped. Keeping a newline in place of the backslash would end the
+    command there for the shell (a bare argument line runs as a command, a
+    leading `&&` is a syntax error)."""
     lines, buf = [], ""
     for raw in dockerfile.read_text(encoding="utf-8").splitlines():
         s = raw.rstrip()
-        if not buf and (not s.strip() or s.lstrip().startswith("#")):
+        if not s.strip() or s.lstrip().startswith("#"):
             continue
         if s.endswith("\\"):
-            buf += s[:-1] + "\n"
+            buf += s[:-1]
             continue
         lines.append(buf + s)
         buf = ""
+    if buf:
+        lines.append(buf)
     env: dict[str, str] = {}
     runs: list[str] = []
     for line in lines:
@@ -231,7 +243,7 @@ def _dockerfile_steps(dockerfile: pathlib.Path) -> tuple[dict[str, str], list[st
                 k, _, v = arg.partition(" ")
                 env[k.strip()] = v.strip().strip("\"'")
         elif ins == "RUN":
-            cmd = arg.strip()
+            cmd = _TRAILING_CLEAN_CHECK.sub("", arg.strip())
             if any(skip in cmd for skip in _SKIP_RUN):
                 continue
             runs.append(cmd)

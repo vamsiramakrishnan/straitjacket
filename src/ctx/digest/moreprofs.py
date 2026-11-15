@@ -537,6 +537,8 @@ _DIAG_RE = re.compile(
     r"^(?P<path>[^\s:][^:\n]*):(?P<line>\d+)(?::\d+)?[:\s-]+\s*(?P<sev>error|warning|note)\b",
     re.MULTILINE | re.IGNORECASE,
 )
+#: A diagnostic "path" that is a log timestamp's date and hour.
+_TIMESTAMP_PATH_RE = re.compile(r"^\[?\d{4}-\d{2}-\d{2}[ T]\d{2}$")
 _BUILD_CMDS = {"tsc", "eslint", "ruff", "mypy", "pyright", "flake8", "pylint",
                "gcc", "g++", "clang", "clang++", "rustc", "cargo", "javac", "make", "ninja"}
 
@@ -562,7 +564,11 @@ class BuildProfile(Profile):
         for view in (ctx.stdout, ctx.stderr):
             for m in _DIAG_RE.finditer(view.text):
                 sev_counts[m.group("sev").lower()] += 1
-                by_file[m.group("path")] += 1
+                # A log line's "YYYY-MM-DD HH:MM:SS ERROR" has the shape
+                # path:line: severity with the date and hour as the "path";
+                # it is a timestamp, not a file.
+                if not _TIMESTAMP_PATH_RE.match(m.group("path")):
+                    by_file[m.group("path")] += 1
         summary.append(
             "  diagnostics (exact): "
             + (" · ".join(f"{k} {fmt_int(v)}" for k, v in sorted(sev_counts.items())) or "none parsed")
@@ -572,6 +578,26 @@ class BuildProfile(Profile):
             for path, n in sorted(by_file.most_common(4)):
                 summary.append(f"    {path}  {n}")
                 shown += 1
+        rid = "run:PENDING"
+        emap = self.evidence_map(ctx, above=summary)
+        if emap is not None:
+            map_lines, map_next, r = emap
+            total = ctx.stdout.lines + ctx.stderr.lines
+            # Two exact counts in one digest name what each counts: this one
+            # is lines shaped `<path>:<line>: <severity>`, the map's is
+            # error-like lines.
+            parsed = ctx.stdout.parsed_fully and ctx.stderr.parsed_fully
+            summary[1] = summary[1].replace(
+                "diagnostics (exact):",
+                "path:line: severity lines (exact" + ("" if parsed else " in the parsed part") + "):", 1)
+            return "\n".join(
+                ctx.header_lines()
+                + summary
+                + map_lines
+                + self.coverage_lines(ctx, (shown + r.windows) or 1,
+                                      max(0, total - r.excerpt_lines))
+                + self.next_lines(ctx, map_next)
+            )
         for view in (ctx.stderr, ctx.stdout):
             for i, ln in enumerate(view.text_lines, start=1):
                 dm = _DIAG_RE.match(ln)
@@ -582,7 +608,6 @@ class BuildProfile(Profile):
             else:
                 continue
             break
-        rid = "run:PENDING"
         return "\n".join(
             ctx.header_lines()
             + summary

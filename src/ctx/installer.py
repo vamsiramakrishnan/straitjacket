@@ -58,7 +58,7 @@ retention_days = 30
 
 [redaction]
 enabled = true
-patterns = ["aws-access-key", "aws-secret-key", "private-key", "github-token", "gitlab-token", "slack-token", "stripe-key", "twilio-key", "sendgrid-key", "npm-token", "pypi-token", "huggingface-token", "anthropic-key", "jwt", "google-api-key", "generic-api-token"]  # fix: template pinned only 3 of 16 code-default patterns
+patterns = ["aws-access-key", "aws-secret-key", "private-key", "github-token", "gitlab-token", "slack-token", "stripe-key", "twilio-key", "sendgrid-key", "npm-token", "pypi-token", "huggingface-token", "anthropic-key", "jwt", "google-api-key", "generic-api-token", "url-credentials"]  # fix: template pinned only 3 of 16 code-default patterns
 """
 
 _CTXIGNORE_TEMPLATE = """\
@@ -912,23 +912,25 @@ def _render_claude_md(exe: str) -> str:
     idempotent and removable, exactly like the Codex AGENTS.md block."""
     return f"""\
 {_CODEX_MARK_START}
-## Context harness (ctx / straitjacket)
+## Context harness (ctx)
 
-This workspace is harnessed by `{exe}`. Noisy command and file output is
-captured at the source and returned as a bounded, addressable digest — work
-*with* it rather than paging or pre-filtering around it.
+Harnessed by `{exe}`: noisy output comes back as a bounded, addressable
+digest; work with it, not around it.
 
-- Answer code questions with `ctx ask "<q>" --intent locate|impact` (where
-  X is defined/used; what breaks if X changes) — one bounded evidence view
-  instead of a search/read/search loop. Pass `--symbol X` unless the
-  question has one unambiguous identifier.
-- Compose typed facts with `ctx q '<stage> | <stage>'` (bounded, total)
-  instead of piping through grep/awk/jq: `refs X | group file | top 3 | get`.
-- Capture noisy commands with `ctx run -- <cmd>`; pull exact bytes with
-  `ctx get <handle>`. Cite handles/coordinates instead of re-quoting output.
+- Answer code questions with `ctx ask "<q>" --intent locate|impact` (where X
+  is used; what breaks if it changes), not a search/read loop; add
+  `--symbol X` unless one is named.
+- Compose facts with `ctx q '<stage> | <stage>'`, not grep/awk/jq
+  pipes: `refs X | group file | top 3 | get`.
+- Capture noisy commands with `ctx run -- <cmd>`; pull bytes with `ctx get
+  <handle>`; cite handles, don't re-quote.
+- Digest excerpts are verbatim with real line numbers; "(exact)" counts are
+  exact; "every error-like line is one of these N messages" is true; a
+  "varies" message stands for several values, listed on its row or by its
+  command. Fetch only what is not shown.
 - Only for output captured by `ctx run`: `ctx ask --intent diagnose`,
   `ctx q 'fails last | in-changed'`, `ctx q 'records run:<id>#stdout'`.
-- For an existing file (a log): grep, Read windows, or
+- For an existing file: grep, Read windows, or
   `ctx search repo:<file> PATTERN`.
 {_CODEX_MARK_END}
 """
@@ -1056,6 +1058,20 @@ def setup_hosts(ws: Workspace, hosts: "list[str] | None" = None) -> str:
     return "\n".join(out).rstrip() + "\n"
 
 
+def _safe_url(url: str) -> str:
+    """``url`` for display: userinfo masked, query and fragment dropped."""
+    from urllib.parse import urlsplit, urlunsplit
+
+    try:
+        u = urlsplit(url)
+    except ValueError:
+        return "<unparseable>"
+    netloc = u.netloc
+    if "@" in netloc:
+        netloc = "***@" + netloc.rsplit("@", 1)[1]
+    return urlunsplit((u.scheme, netloc, u.path, "", ""))
+
+
 def doctor_checks(ws: Workspace, *, antigravity: bool = False) -> list[tuple[str, bool, str]]:
     """The health checks themselves, as (name, ok, detail) rows.
 
@@ -1076,6 +1092,17 @@ def doctor_checks(ws: Workspace, *, antigravity: bool = False) -> list[tuple[str
         "policy loaded",
         True,
         f"guard={ws.config.guard.mode} digest_tokens={ws.config.budgets.digest_tokens}",
+    )
+    pk = ws.config.picker
+    check(
+        "evidence-map picker",
+        True,
+        f"mode={pk.mode} (from {pk.source})"
+        + (f" endpoint={_safe_url(pk.endpoint)} key from ${pk.api_key_env}"
+           f" proxy={_safe_url(pk.proxy) if pk.proxy not in ('', 'env') else (pk.proxy or 'none')}"
+           f" ca_file={pk.ca_file or 'built-in trust store'}"
+           if pk.mode != "local" else "")
+        + "".join(f"; {n}" for n in pk.notes),
     )
 
     try:

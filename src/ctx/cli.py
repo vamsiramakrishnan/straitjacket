@@ -809,6 +809,10 @@ def _build_parser():
         "--block-overlap", dest="replay_block_overlap", type=float, default=0.5,
         help="fraction of a gold block that must be observed to count (default 0.5)",
     )
+    p_replay.add_argument(
+        "--picker", dest="replay_picker", action="store_true",
+        help="evidence-map picker report from this workspace's ledgers: per mode, "
+             "digests, follow-up fetches of the same handle, shadow disagreement")
     p_replay.add_argument("--json", dest="replay_json", action="store_true")
 
     p_debt = sub.add_parser("debt", help="declared-omission ledger for deferred decisions")

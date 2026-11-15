@@ -154,6 +154,10 @@ class Workspace:
 
     def is_ignored(self, rel_path: str) -> bool:
         rel = rel_path.removeprefix("./")
+        from ctx.secretpaths import is_credential_file
+
+        if is_credential_file(rel):
+            return True  # the guard's credential list, any letter case
         spec = self._ignore_spec()
         if spec is not None:
             # Real gitignore semantics (anchoring, dir patterns, negation)
