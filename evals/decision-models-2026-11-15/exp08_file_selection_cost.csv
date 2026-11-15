@@ -1,7 +1,7 @@
 chooser,task_text,input_tokens_per_file_mean_min_max,usd_per_file_mean,calls_per_file,seconds_per_file_mean_min_max
-model-outline,first 300 characters,4644 [1075-17056],0.00046,1.0,0.46 [0.27-0.80]
-model-outline,whole text,5113 [1439-17947],0.00051,1.0,0.46 [0.26-0.98]
-model-body-600,first 300 characters,7898 [2023-30105],0.00079,1.1,0.53 [0.30-1.37]
-model-body-600,whole text,8414 [2387-31887],0.00084,1.1,0.50 [0.28-1.11]
-model-body-1200,first 300 characters,9445 [2335-38819],0.00094,1.1,0.52 [0.30-1.49]
-model-body-1200,whole text,10015 [2699-41631],0.00100,1.1,0.53 [0.31-1.92]
+decision model on a function list,first 300 characters,4644 [1075-17056],0.00046,1.0,0.46 [0.27-0.80]
+decision model on a function list,whole text,5113 [1439-17947],0.00051,1.0,0.46 [0.26-0.98]
+decision model on function bodies (600 characters each),first 300 characters,7898 [2023-30105],0.00079,1.1,0.53 [0.30-1.37]
+decision model on function bodies (600 characters each),whole text,8414 [2387-31887],0.00084,1.1,0.50 [0.28-1.11]
+"decision model on function bodies (1,200 characters each)",first 300 characters,9445 [2335-38819],0.00094,1.1,0.52 [0.30-1.49]
+"decision model on function bodies (1,200 characters each)",whole text,10015 [2699-41631],0.00100,1.1,0.53 [0.31-1.92]

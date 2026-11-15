@@ -1,7 +1,7 @@
-arrangement,flags_or_items,names_a_cause,fixed_later,real_defect,pre_existing,debatable,wrong,unchecked
-"mid-size general model per-edit, after-only",4,0,0,0,0,0,4,0
-"mid-size general model per-edit, before+after",5,0,0,0,0,0,5,0
-decision model plain gate 0.5 -> mid-size general model after-only,1,0,0,0,0,0,1,0
-decision model introduced gate 0.5 -> mid-size general model after-only,1,0,0,0,0,0,1,0
-end review mid-size general model,12,2,0,2,0,1,6,1
-end review large general model,9,2,0,3,0,3,1,0
+arrangement,flags_or_items,items_naming_a_lost_test_cause,fixed_later,real_defect,pre_existing,debatable,wrong,unchecked
+"mid-size general model reviews each edit, edit only",4,0,0,0,0,0,4,0
+"mid-size general model reviews each edit, edit and old code",5,0,0,0,0,0,5,0
+"decision model filter (score >= 0.5), then mid-size general model per edit",1,0,0,0,0,0,1,0
+"decision model filter (score >= 0.5 and old code < 0.5), then mid-size general model per edit",1,0,0,0,0,0,1,0
+one review of the finished patch by the mid-size general model,12,2,0,2,0,1,6,1
+one review of the finished patch by the large general model,9,2,0,3,0,3,1,0
