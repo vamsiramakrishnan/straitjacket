@@ -95,23 +95,67 @@ def test_spool_without_newlines_and_binary(tmp_path):
 # --------------------------------------------------- the running command
 FOREVER = "import sys\nwhile True:\n    sys.stdout.write('y' * 99 + '\\n')\n"
 
+#: Numbered 100-byte lines written forever in 4,093-byte pieces, so the kill
+#: lands inside a line however the run is timed. Each write is below
+#: PIPE_BUF, so whole pieces are drained; the test never assumes where.
+NUMBERED_FOREVER = (
+    "import os\nbuf = b''\ni = 0\n"
+    "while True:\n"
+    "    while len(buf) < 4093:\n"
+    "        buf += b'%09d' % i + b'y' * 90 + b'\\n'\n"
+    "        i += 1\n"
+    "    os.write(1, buf[:4093])\n"
+    "    buf = buf[4093:]\n")
+
+
+def _numbered_stream(n_bytes: int) -> bytes:
+    lines = n_bytes // 100 + 1
+    return b"".join(b"%09d" % i + b"y" * 90 + b"\n" for i in range(lines))[:n_bytes]
+
 
 def test_runaway_command_is_stopped_and_disk_stays_bounded(state_home, workspace_dir):
     ws = _ws(workspace_dir)
     store = make_store(ws)
     start = time.monotonic()
-    cap = _run(ws, store, [sys.executable, "-c", FOREVER], timeout=120)
+    cap = _run(ws, store, [sys.executable, "-c", NUMBERED_FOREVER], timeout=120)
     assert time.monotonic() - start < 60  # stopped by the runaway limit, not the timeout
     m = cap.manifest
     assert m["result"]["outputLimited"] is True and m["result"]["signal"] == "SIGKILL"
     assert m["result"]["timedOut"] is False
     out = m["streams"]["stdout"]
     block = out["capture"]
-    assert block["totalBytes"] >= 16 * CAP  # drained, and counted, up to the limit
-    assert block["totalBytes"] % 100 == 0 and block["totalLines"] == block["totalBytes"] // 100
-    assert out["bytes"] <= CAP
+    total = block["totalBytes"]
+    assert total >= 16 * CAP  # drained, and counted, up to the limit
+    # Exact against ground truth, wherever the kill landed: the drained
+    # stream is the first `total` bytes of the numbered stream.
+    drained = _numbered_stream(total)
+    head, tail = block["headBytes"], block["tailBytes"]
+    assert head + block["droppedBytes"] + tail == total
+    assert block["keptBytes"] == head + tail
+    stored = _blob(store, out)
+    added = b"\n" if block["lineBreakAdded"] else b""
+    assert stored == drained[:head] + added + drained[total - tail:]  # the tail IS the end
+    assert block["totalLines"] == drained.count(b"\n") + (0 if drained.endswith(b"\n") else 1)
+    assert block["headLines"] == drained[:head].count(b"\n") + (0 if not head or drained[:head].endswith(b"\n") else 1)
+    assert block["tailFirstLine"] == drained[:total - tail].count(b"\n") + 1
+    assert out["bytes"] <= CAP + 1
     # Everything the store holds for this run: the cap plus manifests/index.
     assert _dir_bytes(state_home) <= CAP + 256 * 1024
+
+
+def test_a_stream_cut_mid_line_by_the_kill_is_counted_exactly(state_home, workspace_dir):
+    # The counts for a stream that ends inside a line: the partial last line
+    # is a line (docs: "lines in all"), its bytes are all counted, and the
+    # stored tail ends with exactly those bytes.
+    ws = _ws(workspace_dir)
+    store = make_store(ws)
+    script = "import os\nos.write(1, b'x' * 99 + b'\\n')\nos.write(1, (b'y' * 99 + b'\\n') * 2000 + b'tail-no-nl')"
+    m = _run(ws, store, [sys.executable, "-c", script]).manifest
+    block = m["streams"]["stdout"]["capture"]
+    total = 100 + 200000 + len(b"tail-no-nl")
+    assert block["totalBytes"] == total and block["totalLines"] == 2002
+    assert block["headBytes"] + block["droppedBytes"] + block["tailBytes"] == total
+    assert _blob(store, m["streams"]["stdout"]).endswith(b"y\ntail-no-nl")
 
 
 def test_large_output_under_the_runaway_limit_is_drained_not_killed(state_home, workspace_dir):

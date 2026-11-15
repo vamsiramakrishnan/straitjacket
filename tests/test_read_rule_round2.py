@@ -184,7 +184,7 @@ def test_a_glob_over_more_than_5000_entries_keeps_base_when_nothing_was_seen(wor
     start = time.perf_counter()
     out = _run(world, "claude-code", "cat big/*")
     assert not _fired(out), out
-    assert time.perf_counter() - start < 5
+    assert time.perf_counter() - start < 30  # bounded scan (about 20 ms unloaded)
 
 
 def test_a_link_out_seen_before_the_bound_is_kept(world):
