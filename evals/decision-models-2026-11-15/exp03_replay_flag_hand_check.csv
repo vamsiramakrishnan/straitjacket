@@ -1,0 +1,5 @@
+flag_source,flags_in_passed_sessions,checked_by_hand,real_new_defect_that_survived,real_at_that_moment_agent_fixed_later,real_but_pre_existing_or_other_task,style_or_opinion,wrong,unlabelled
+"mid-size general model, edit only",23,23,0,14,5,0,4,0
+"mid-size general model, edit and old code",18,18,0,13,0,0,5,0
+"decision model alone, score after edit >= 0.5 and old code < 0.5",2,2,0,1,0,0,1,0
+"decision model alone, score after edit >= 0.5",50,25,0,8,3,0,14,0

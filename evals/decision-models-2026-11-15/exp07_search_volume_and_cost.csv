@@ -1,0 +1,13 @@
+item,value
+"searches returning more than 40 lines, scored",147
+projects among them,7
+"searches returning more than 20 lines, scored",167
+"decision model calls, whole experiment",354
+"input tokens, whole experiment",1727308
+"cost, whole experiment (usd)",0.1727
+"cost per search, first-300-characters variant (usd)",0.0007
+"cost per search, whole-text variant (usd)",0.00078
+"median seconds per call, first-300-characters variant",0.39
+"median seconds per call, whole-text variant",0.4
+real agent searches found in the 4 recorded sessions,13
+of which returned more than 40 lines,4

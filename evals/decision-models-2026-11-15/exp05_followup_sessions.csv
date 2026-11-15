@@ -1,0 +1,13 @@
+task,repeat,agent_alone_solved,agent_alone_target_tests_passed,agent_alone_turns,agent_alone_cost_usd,review_items_raised,review_cost_usd,after_review_ran,after_review_solved,after_review_target_tests_passed,after_review_followup_cost_usd,after_review_tests_newly_failing,self_check_ran,self_check_solved,self_check_target_tests_passed,self_check_followup_cost_usd,self_check_tests_newly_failing
+adaptix-name-mapping-aliases,1,True,44/44,75,0.8498,2,0.1448,True,True,44/44,0.0432,0,True,True,44/44,0.0898,0
+adaptix-name-mapping-aliases,2,True,44/44,100,1.3216,0,0.2305,False,,,,,True,True,44/44,0.0341,0
+bandit-incremental-cache-control,1,False,87/88,44,0.3765,2,0.2724,True,False,87/88,0.0202,0,True,False,87/88,0.0774,0
+bandit-incremental-cache-control,2,True,88/88,55,0.7273,0,0.269,False,,,,,True,True,88/88,0.0479,0
+bandit-interprocedural-taint-checks,1,True,66/66,45,0.5306,3,0.3077,True,True,66/66,0.0404,0,True,True,66/66,0.036,0
+bandit-interprocedural-taint-checks,2,True,66/66,43,0.4514,5,0.2684,True,True,66/66,0.1316,0,True,True,66/66,0.3191,0
+cattrs-partial-structuring-recovery,1,False,67/69,38,0.329,5,0.1777,True,True,69/69,0.0745,0,True,False,67/69,0.0506,0
+cattrs-partial-structuring-recovery,2,True,69/69,30,0.2093,5,0.154,True,True,69/69,0.5165,0,True,True,69/69,0.0402,0
+kombu-single-active-consumer-priority,1,True,85/85,51,0.5751,1,0.247,True,True,85/85,0.0083,0,True,True,85/85,0.1732,0
+kombu-single-active-consumer-priority,2,True,85/85,45,0.4693,2,0.2346,True,True,85/85,0.0419,0,True,True,85/85,0.0872,0
+mashumaro-flattened-dataclass-fields,1,True,66/66,55,0.6892,2,0.2193,True,True,66/66,0.0411,0,True,True,66/66,0.0734,0
+mashumaro-flattened-dataclass-fields,2,True,66/66,47,0.5624,4,0.1885,True,True,66/66,0.3178,0,True,True,66/66,0.2358,0

@@ -1,0 +1,7 @@
+lines_shown,metric,weighting,difference_decision_model_whole_text_minus_best_simple_rule,ci95_low,ci95_high
+40,at_least_one_relevant_shown,projects weighted equally,0.209,-0.046,0.365
+40,at_least_one_relevant_shown,all searches pooled,0.252,0.184,0.327
+40,relevant_share_of_shown_lines,projects weighted equally,0.229,0.071,0.319
+40,relevant_share_of_shown_lines,all searches pooled,0.24,0.189,0.29
+20,at_least_one_relevant_shown,projects weighted equally,0.417,0.135,0.518
+20,at_least_one_relevant_shown,all searches pooled,0.311,0.234,0.383

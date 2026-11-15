@@ -1,0 +1,5 @@
+follow_up,started_from,sessions_run,sessions_that_changed_code,mean_files_changed,mean_changed_lines,sessions_that_touched_a_test_file
+after the large model review,solved,8,8,2.4,134,7
+after the large model review,unsolved,2,2,3.5,120,2
+told to re-check its own work,solved,10,10,2.1,65,8
+told to re-check its own work,unsolved,2,2,4.0,144,2

@@ -1,0 +1,5 @@
+project,resolved,mid_size_general_model_ship_score,large_general_model_ship_score,decision_model_probability_fully_correct
+cattrs,no,0.12,0.3,0.89
+bandit,no,0.6,0.55,0.87
+kombu,yes,0.03,0.68,0.93
+mashumaro,yes,0.3,0.68,0.87

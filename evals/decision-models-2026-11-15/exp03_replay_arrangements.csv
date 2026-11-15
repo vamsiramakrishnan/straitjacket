@@ -1,0 +1,10 @@
+arrangement,flags_per_100_code_edits_in_passed_sessions,flags_per_passed_session,passed_sessions_with_a_flag_of_65,defective_edits_flagged_of_4,review_cost_per_session_usd,added_time_per_session,flag_cost_as_extra_turns_per_passed_session_usd
+"mid-size general model reviews every edit, shown the edit only",18.3,0.35,21/65,0/4,$0.0221,6.2 s,$0.0013
+"mid-size general model reviews every edit, shown the edit and the code before it",14.3,0.28,18/65,0/4,$0.0251,6.2 s,$0.0009
+"decision model filter (score after the edit >= 0.3 and old code < 0.3), then mid-size general model, edit only",0.0,0.00,0/65,0/4,$0.0004,0.7 s,$0.0000
+"decision model filter (score after the edit >= 0.3 and old code < 0.3), then mid-size general model, edit and old code",0.0,0.00,0/65,0/4,$0.0004,0.7 s,$0.0000
+"decision model filter (score after the edit >= 0.5 and old code < 0.5), then mid-size general model, edit only",0.8,0.02,1/65,0/4,$0.0005,0.7 s,$0.0000
+"decision model filter (score after the edit >= 0.5 and old code < 0.5), then mid-size general model, edit and old code",0.8,0.02,1/65,0/4,$0.0006,0.7 s,$0.0000
+"decision model filter (score after the edit >= 0.5), then mid-size general model, edit only",15.9,0.31,18/65,0/4,$0.0098,3.3 s,$0.0012
+"decision model alone, flags when score after the edit >= 0.5 and old code < 0.5",1.6,0.03,2/65,0/4,$0.0002,0.7 s,$0.0000
+"decision model alone, flags when score after the edit >= 0.5",39.7,0.77,38/65,2/4,$0.0002,0.7 s,$0.0025

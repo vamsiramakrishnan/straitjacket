@@ -1,0 +1,7 @@
+metric,decision_model_variant,best_simple_rule_for_this_metric,model_value,rule_value,difference_projects_weighted_equally,ci95_resampling_projects_rule_fixed,difference_all_searches_pooled,ci95_resampling_searches_rule_fixed,projects_won_tied_lost
+at least one relevant shown,"decision model, first 300 characters of task text","non-test first, then overlap of task words with path words",0.802,0.459,+0.343,"[+0.162, +0.550]",+0.228,"[+0.156, +0.305]",7/0/0
+at least one relevant shown,"decision model, whole task text","non-test first, then overlap of task words with path words",0.876,0.459,+0.417,"[+0.237, +0.605]",+0.311,"[+0.240, +0.383]",7/0/0
+relevant share of shown lines,"decision model, first 300 characters of task text","non-test first, then overlap of task words with path words",0.364,0.186,+0.178,"[+0.068, +0.325]",+0.162,"[+0.113, +0.214]",7/0/0
+relevant share of shown lines,"decision model, whole task text","non-test first, then overlap of task words with path words",0.396,0.186,+0.210,"[+0.076, +0.355]",+0.300,"[+0.243, +0.358]",7/0/0
+modified-file recall,"decision model, first 300 characters of task text",non-test and shallower files first,0.350,0.197,+0.152,"[+0.003, +0.298]",+0.235,"[+0.184, +0.284]",5/0/2
+modified-file recall,"decision model, whole task text",non-test and shallower files first,0.388,0.197,+0.191,"[+0.026, +0.354]",+0.321,"[+0.271, +0.375]",5/0/2

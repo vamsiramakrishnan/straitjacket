@@ -1,0 +1,5 @@
+batch,group,sessions,correct,mean_turns,mean_input_tokens_thousands,mean_follow_up_fetches,answered_with_no_follow_up
+A,"same build, group 1",20,20,3.10,123,0.50,12
+A,"same build, group 2",20,20,4.35,170,1.00,8
+B,"same build, group 1",20,20,2.95,119,0.90,10
+B,"same build, group 2",20,20,3.30,129,0.60,12

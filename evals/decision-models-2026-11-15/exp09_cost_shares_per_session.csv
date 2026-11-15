@@ -1,0 +1,13 @@
+task,run,solved,model_calls,recorded_cost_usd,simple_price_model_cost_usd,search_pct,other_command_output_pct,file_views_pct,other_tool_results_pct,other_pct,system_prompt_and_task_pct,model_output_written_pct,model_output_reread_pct,model_output_cache_write_pct,model_output_and_reread_pct,model_output_all_three_pct,saved_by_cutting_search_to_40_lines_pct,saved_by_cutting_other_command_output_to_100_lines_pct,saved_by_cutting_file_views_to_100_lines_pct,saved_search_and_command_output_pct
+bandit-incremental-cache-control,first run,False,32,0.3765,0.3826,0.53,3.64,6.55,0.4,7.17,15.83,39.66,16.48,9.74,56.14,65.88,0.39,1.08,5.16,1.47
+cattrs-partial-structuring-recovery,first run,False,38,0.329,0.3826,0.07,1.6,6.07,0.11,5.47,18.68,38.84,19.58,9.59,58.41,68.01,0.01,0.0,4.03,0.01
+kombu-single-active-consumer-priority,first run,True,42,0.5751,0.5384,2.06,1.05,3.0,3.91,5.62,14.87,40.08,19.54,9.86,59.63,69.49,1.45,0.08,1.65,1.53
+mashumaro-flattened-dataclass-fields,first run,True,54,0.6892,0.6593,1.46,2.25,5.94,0.04,6.13,14.76,36.64,23.74,9.04,60.38,69.42,0.71,0.32,3.68,1.03
+bandit-incremental-cache-control,second run,True,55,0.7273,0.6713,1.1,2.38,6.63,0.47,6.75,14.85,36.09,22.79,8.94,58.88,67.82,0.74,0.51,5.4,1.25
+cattrs-partial-structuring-recovery,second run,True,30,0.2093,0.2945,0.2,1.1,6.31,0.07,5.39,19.13,42.59,14.7,10.51,57.29,67.81,0.02,0.0,3.21,0.02
+kombu-single-active-consumer-priority,second run,True,36,0.4693,0.4499,0.99,0.74,4.63,4.28,6.18,15.21,41.74,15.89,10.34,57.63,67.97,0.63,0.0,2.3,0.63
+mashumaro-flattened-dataclass-fields,second run,True,47,0.5624,0.557,0.51,1.89,6.37,0.0,5.25,15.27,38.18,23.13,9.41,61.3,70.71,0.34,0.08,4.48,0.42
+adaptix-name-mapping-aliases,first run,True,75,0.8498,0.7778,3.08,3.09,8.73,0.05,11.86,17.21,26.95,22.38,6.66,49.33,55.99,1.61,0.15,4.62,1.77
+bandit-interprocedural-taint-checks,first run,True,42,0.5306,0.5324,0.74,3.81,4.23,0.06,6.1,14.55,39.73,20.99,9.8,60.72,70.52,0.23,1.63,2.23,1.86
+bandit-interprocedural-taint-checks,second run,True,40,0.4514,0.4754,0.61,2.76,2.91,0.04,5.25,15.47,42.39,20.12,10.44,62.52,72.96,0.31,0.37,0.95,0.68
+adaptix-name-mapping-aliases,second run,True,95,1.3216,1.1423,1.87,2.1,10.59,0.33,11.24,14.68,25.61,27.24,6.34,52.85,59.2,0.68,0.06,6.31,0.74

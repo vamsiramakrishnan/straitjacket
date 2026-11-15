@@ -1,0 +1,7 @@
+decision model chooser,task_text,vs_word_matching_better_tie_worse,vs_symbol_matching,vs_first_240_lines
+decision model on a function list,first 300 characters,6 / 9 / 4,6 / 9 / 4,9 / 6 / 4
+decision model on a function list,whole text,6 / 11 / 2,7 / 11 / 1,8 / 9 / 2
+decision model on function bodies (600 characters each),first 300 characters,5 / 10 / 4,5 / 9 / 5,7 / 9 / 3
+decision model on function bodies (600 characters each),whole text,5 / 10 / 4,6 / 9 / 4,7 / 9 / 3
+"decision model on function bodies (1,200 characters each)",first 300 characters,5 / 9 / 5,5 / 8 / 6,7 / 9 / 3
+"decision model on function bodies (1,200 characters each)",whole text,4 / 11 / 4,9 / 8 / 2,9 / 7 / 3
