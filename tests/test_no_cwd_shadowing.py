@@ -561,7 +561,7 @@ def test_generated_agy_launcher_is_safe(tmp_path, monkeypatch):
 
     monkeypatch.setattr(agysdk, "launcher_path", lambda: tmp_path / "ctx-agy")
     text = agysdk._write_launcher().read_text()
-    assert " -P -c " in text
+    assert " -I -c " in text
 
 
 _SCAN_CASES = {
