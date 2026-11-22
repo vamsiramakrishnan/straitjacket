@@ -1,0 +1,22 @@
+---
+import StarlightSearch from '@astrojs/starlight/components/Search.astro';
+---
+
+<StarlightSearch {...Astro.props} />
+
+<script>
+  const button = document.querySelector('site-search button[data-open-modal]');
+  const label = button?.querySelector(':scope > span');
+  const shortcut = button?.querySelector(':scope > kbd');
+
+  if (button && label && shortcut) {
+    label.id = 'sj-search-label';
+    shortcut.id = 'sj-search-shortcut';
+    // Starlight shows the platform-specific shortcut in its desktop header.
+    const desktop = matchMedia('(min-width: 50rem)');
+    const nameSearch = () => button.setAttribute('aria-labelledby',
+      desktop.matches ? `${label.id} ${shortcut.id}` : label.id);
+    nameSearch();
+    desktop.addEventListener('change', nameSearch);
+  }
+</script>
