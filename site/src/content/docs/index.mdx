@@ -1,76 +1,62 @@
 ---
-title: straitjacket
-description: Delegate work across coding harnesses, reuse prompt prefixes, and retrieve the code or test output a worker needs.
+title: Straitjacket documentation
+description: Capture tool output once, retrieve the relevant lines, and pass evidence between coding harnesses.
 template: splash
 hero:
-  title: straitjacket
-  tagline: >-
-    Give coding agents a shared way to find code, check a result, and hand it
-    to the next worker. Keep your existing harness and model.
+  title: Share evidence across harnesses
+  tagline: Capture command output once. Give the next coding agent a short digest and an address for the lines it needs.
   actions:
-    - text: Run your first command
+    - text: Install the CLI
       link: /straitjacket/start/getting-started/
-      icon: right-arrow
-      variant: primary
-    - text: Delegate across harnesses
-      link: /straitjacket/guides/harness-collaboration/
-      variant: secondary
-    - text: GitHub
-      link: https://github.com/vamsiramakrishnan/straitjacket
-      icon: github
-      variant: minimal
 ---
 
-<p>
-  <a href="https://code.claude.com/"><img src="/straitjacket/agents/claude.svg" width="36" height="36" alt="Claude Code" title="Claude Code" /></a>
-  <a href="https://developers.openai.com/codex/"><img src="/straitjacket/agents/codex.svg" width="36" height="36" alt="Codex" title="Codex" /></a>
-  <a href="https://antigravity.google/"><img src="/straitjacket/agents/antigravity.png" width="36" height="36" alt="Antigravity" title="Antigravity" /></a>
-  <a href="https://github.com/NousResearch/hermes-agent"><img src="/straitjacket/agents/hermes.svg" width="36" height="36" alt="Hermes" title="Hermes" /></a>
-  <a href="https://github.com/can1357/oh-my-pi"><img src="/straitjacket/agents/omp.svg" width="36" height="36" alt="Oh My Pi" title="Oh My Pi" /></a>
-  <a href="https://opencode.ai/"><img src="/straitjacket/agents/opencode.svg" width="36" height="36" alt="OpenCode" title="OpenCode" /></a>
-  <a href="https://github.com/deepseek-ai/deepseek-harness"><img src="/straitjacket/agents/dsh.svg" width="36" height="36" alt="DeepSeek Harness" title="DeepSeek Harness" /></a>
-</p>
+import '../../styles/landing.css';
+import { Icon } from '@astrojs/starlight/components';
 
-## Start with a task
+export const guides = [
+  ['Delegate to another harness', 'Route a task over ACP and pass a checkpoint to the next worker.', 'guides/harness-collaboration'],
+  ['Find a symbol and its callers', 'Go from a name to a definition, references, and source lines.', 'guides/code-search'],
+  ['Reuse a prompt prefix', 'Keep fixed input ahead of changing evidence. Measure what the provider caches.', 'guides/query-aware-selection'],
+  ['Choose skills and tools', 'Inspect the skill listings and tool schemas a worker sees.', 'design/capability-surface'],
+  ['Select a Gemini model', 'Run Hydrogen, Neon, Carbon, or Argon in Antigravity.', 'guides/native-agy-sessions'],
+];
 
-| Task | How to do it |
-|---|---|
-| Hand a code review from one harness to another | [Configure an ACP worker](/straitjacket/guides/acp/). [Preview the route](/straitjacket/guides/routing/) to see which harness and model gets each step. Workers pass checkpoints and evidence addresses to their dependents. |
-| Decide which skills a model sees | [Inspect the capability surface](/straitjacket/design/capability-surface/). On Claude Code, compare the estimated cost of a skill listing with its deferred body and choose a launch profile. |
-| Trace a symbol across a repository | [Search for the definition and follow its references](/straitjacket/guides/use-cases/). Open the reported span when you need the implementation. |
-| Keep a repeated prompt prefix cacheable | [Put fixed reference material before the changing evidence and question](/straitjacket/guides/query-aware-selection/). Compare provider-reported cache usage and total task cost. |
-| Run Gemini 4 Hydrogen, Neon, Carbon, or Argon | [Select a model for Antigravity](/straitjacket/guides/native-agy-sessions/). Run `agy models` for your account's native IDs. ACP uses its endpoint's advertised ID. |
+<div class="sj-directory">
+  <nav class="sj-guides" aria-labelledby="start-with-a-task">
+    <h2 id="start-with-a-task">Workflow guides</h2>
+    <ul role="list">
+      {guides.map(([name, detail, path]) => (
+        <li>
+          <a href={`/straitjacket/${path}/`}>
+            <span><strong>{name}</strong><span class="sj-detail">{detail}</span></span>
+            <Icon name="right-arrow" size="1.05rem" />
+          </a>
+        </li>
+      ))}
+    </ul>
+  </nav>
+  <div class="sj-notes">
+    <section aria-labelledby="what-the-benchmarks-tell-you">
+      <h2 id="what-the-benchmarks-tell-you">What reaches the prompt</h2>
+      <dl class="sj-counts">
+        <div><dt>Raw log tokens</dt><dd>302,628</dd></div>
+        <div><dt>Digest tokens</dt><dd>531</dd></div>
+      </dl>
+      <p>Both counts come from the same 20,001-line log. The digest identifies the fallback at line 14,238 and includes a retrieval address.</p>
+      <p>On three small coding tasks, both agents finished all three and the wrapped agent cost more.</p>
+      <a class="sj-text-link" href="https://github.com/vamsiramakrishnan/straitjacket/blob/main/evals/agentbench/RESULTS.md">Read the benchmark results</a>
+    </section>
+    <section aria-labelledby="supported-harnesses">
+      <h2 id="supported-harnesses">Supported harnesses</h2>
+      <p>Claude Code, Codex, Antigravity, Hermes, Oh My Pi, OpenCode, and DeepSeek Harness.</p>
+      <a class="sj-text-link" href="/straitjacket/guides/host-capabilities/">Compare host capabilities</a>
+    </section>
+  </div>
+</div>
 
-## Capture a failure
-
-In a Python repository with tests:
-
-```sh
-python -m pip install --upgrade ctx-harness
-ctx run -- pytest -q
-```
-
-For a long test run, the agent gets the outcome, failed test names, and an
-address for the captured output. A failed test run returns a nonzero status. Replace the sample
-handle below with the address from your digest.
-
-```sh
-ctx search run:ba3d1020ee8f#stdout 'AssertionError'
-```
-
-The CLI requires Python 3.11+. Host hooks are optional. The local plaintext
-store retains up to the configured capture limit. [Follow one command through capture and retrieval](/straitjacket/start/how-it-works/).
-
-## What the benchmarks tell you
-
-A 20,001-line fixture used 302,628 tokens as raw text. Its 531-token digest
-retained the quiet event at line 14,238 and a retrieval address. In a separate
-live comparison on three small tasks, both agents solved all three and the
-wrapped agent cost more. Use task completion and provider usage to decide
-where wrapping pays. [Log fixture](https://github.com/vamsiramakrishnan/straitjacket/blob/main/evals/field-needle-2026-07-20.md) ·
-[Live comparisons](https://github.com/vamsiramakrishnan/straitjacket/blob/main/evals/agentbench/RESULTS.md).
-
-[Host capabilities](/straitjacket/guides/host-capabilities/) ·
-[CLI reference](/straitjacket/guides/cli/) ·
-[Configuration](/straitjacket/guides/configuration/) ·
-[Troubleshooting](/straitjacket/guides/troubleshooting/)
+<nav class="sj-reference" aria-label="Project resources">
+  <a href="/straitjacket/guides/cli/">CLI reference</a>
+  <a href="/straitjacket/guides/configuration/">Configuration</a>
+  <a href="/straitjacket/guides/troubleshooting/">Troubleshooting</a>
+  <a href="https://github.com/vamsiramakrishnan/straitjacket">GitHub repository</a>
+</nav>

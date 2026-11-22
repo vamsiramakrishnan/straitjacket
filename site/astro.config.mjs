@@ -16,6 +16,10 @@ export default defineConfig({
   integrations: [
     starlight({
       title: 'straitjacket',
+      components: {
+        Hero: './src/components/LandingHero.astro',
+        Search: './src/components/Search.astro',
+      },
       description:
         'Delegate work across coding harnesses, find code by symbol, and reuse prompt prefixes.',
       social: [
