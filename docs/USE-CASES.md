@@ -1,247 +1,112 @@
 # Use cases
 
-Choose a command by the evidence you need next. Each workflow below names the
-failure it addresses, the command to run, and the result to inspect. Start with
-native tools when their complete output is already small.
+## Find the code behind a change
 
-## Choose by failure mode
+If you know the symbol, start there. From the Straitjacket checkout, these
+commands locate the function that parses artifact handles, read its definition,
+and find its uses in the CLI command modules.
 
-| You are doing | The usual failure | Start with |
+```bash
+ctx search repo: sym:parse_ref
+ctx def repo:src/ctx/refs.py:parse_ref
+ctx refs parse_ref --path src/ctx/commands
+```
+
+The search finds the definition in `src/ctx/refs.py`. The definition includes a
+snapshot and separate commands to retrieve the captured body or check the
+current source. The references list paths and line numbers. Check the engine
+in the header. A current SCIP index can resolve symbol identity. The textual
+fallback also matches names in comments, strings and unrelated scopes.
+[Code search and index coverage](CODE-SEARCH.md)
+
+Choose the starting point that matches what you know.
+
+| Starting point | Command | What to read |
 |---|---|---|
-| Running a noisy test suite | The first failure crowds out the failure census | `ctx run -- pytest -q` |
-| Inspecting many files | Every intermediate read becomes permanent transcript history | `ctx seq` or `ctx py` |
-| Following a long build | The agent idles, polls, and repeatedly absorbs partial logs | `ctx run --bg-after …` + `ctx job` |
-| Searching a large repository | Text matches create a low-precision wall of bytes | `ctx q`, `ctx map`, `ctx search` |
-| Comparing verification runs | The model rereads two complete outputs to infer a delta | `ctx diff run:A run:B` |
-| Delegating exploration | The parent receives an unauditable summary or the whole trace | `ctx-explorer` with cited handles |
-| Calling verbose MCP tools | Connector payloads become transcript residency | host interception + artifact-backed digest |
+| An unfamiliar repository | `ctx map --budget 600` | Ranked files and symbol signatures within the requested map budget |
+| An issue or task description | `ctx pack 'Where does parse_ref validate a run handle?' --files 3` | Three candidate files at most, with ranking reasons and source coordinates |
+| An error string | `ctx search repo: 'unknown stream' file:src/ lang:python` | Matching lines in Python source and a coverage count |
+| A symbol with many uses | `ctx q 'refs parse_ref \| group file \| top 3'` | Reference sites grouped by file, with any upstream omissions reported |
 
-## 1. A test suite fails loudly
+On 14 DeepSWE tasks, the top eight files from `ctx pack` included an average
+54.0% of the existing source files changed by the reference fix. Ranking by
+grep count reached 42.9%. The grep ranking found at least one relevant file on
+all 14 tasks, and the pack did so on 12. If the ranked files miss, search for
+a specific error or symbol. [Per-task results](../evals/agentbench/results/pack_recall.json)
 
-### The failure mode
+## Run known checks in one turn
 
-A large suite can print hundreds of thousands of tokens. Conventional truncation keeps
-an arbitrary slice; “first failure only” hides whether five tests share one cause; a later
-compaction may remove the exact traceback that mattered.
-
-### The bounded path
-
-```bash
-ctx run -- pytest -q
-```
-
-A useful test digest should preserve:
-
-- the complete failing-test identity census;
-- one compact evidence line per failure when the budget permits;
-- exact traceback/output coordinates;
-- declared overflow with a continuation address;
-- the full raw run as an immutable artifact.
-
-Use retrieval only for the failure you are actively diagnosing:
-
-```bash
-ctx get run:8d8335db6848#stdout --lines 418:472
-```
-
-### Why it helps
-
-The model reasons over the **shape of the failure set** before it commits to one
-traceback. Detail remains one bounded page fault away.
-
-### Do not use it when
-
-The command is statically small and already returns the complete answer. straitjacket
-should not turn a six-line unit-test result into a retrieval workflow.
-
-## 2. Repository exploration fans out
-
-### The failure mode
-
-The model repeatedly lists files, searches names, opens candidates, searches callers,
-then opens tests. Even when every operation is individually bounded, the transcript
-accumulates the intermediate exploration state and pays for it again on subsequent
-turns.
-
-### The bounded path
-
-Use `ctx seq` when the fan-out is known before execution:
+When you already know which commands to run, submit them together. Each step
+keeps its own result and evidence address. The following example runs in the
+Straitjacket checkout with its development dependencies installed.
 
 ```bash
 ctx seq \
-  --step 'rg -n "TokenBucket" src tests' \
-  --step 'git diff --stat HEAD~1' \
-  --step 'pytest -q tests/test_token_bucket.py'
+  --step 'git diff --stat' \
+  --step 'python -m pytest tests/test_codeverbs.py'
 ```
 
-Use `ctx py` when later operations depend on structured results from earlier ones:
+Use `ctx q` to group or filter existing results locally. Use `ctx py` when a
+later command depends on an earlier result and you can express the choice in
+Python. When the next step requires judgment, return the evidence to the agent.
+[CLI guide](CLI.md)
+
+## Diagnose a failing run
 
 ```bash
-ctx py investigation.py
+ctx run -- python -m pytest
 ```
 
-Use `ctx q` when the intent is expressible as a total pipeline over typed records:
+For verbose pytest output, the digest lists failing tests and points to their
+tracebacks. Set `RUN` to the printed `run:` address. Search the captured stream,
+then use the matching lines to choose a range. The range here is an example.
 
 ```bash
-ctx q 'fails last | in-changed | group symbol | top 10'
+ctx search "${RUN}#stdout" 'AssertionError'
+ctx get "${RUN}#stdout" --lines 120:136
 ```
 
-### Why it helps
+The same approach works for a repeated log message or an error buried in a
+build. Switch to `#stderr` if the command writes diagnostics there. A capture
+that exceeds the per-stream storage cap reports which bytes it kept. Searches
+can only find evidence in those regions. [Capture limits](CLI.md#output-that-never-stops)
 
-Deterministic fan-out executes beside the repository. The model receives one organized
-evidence result instead of becoming the scheduler, parser, join engine, and state store
-for every intermediate command.
-
-### The operating rule
-
-> Batch deterministic fan-out. Return to the model when new evidence can change the
-> hypothesis.
-
-One giant plan is not always better. A plan that efficiently investigates the wrong
-hypothesis wastes less context and more time. Batch within an epistemic epoch; re-plan
-at genuine uncertainty boundaries.
-
-## 3. A build or integration test runs for minutes
-
-### The failure mode
-
-The agent waits, polls, rereads growing output, or times out while the child process
-continues. Partial logs repeatedly enter context, and process lifecycle becomes implicit.
-
-### The bounded path
+After an edit, run the check again. Set `AFTER` to the new `run:` address and
+compare the outcomes, added or removed failures, and changed log patterns.
 
 ```bash
-ctx run --bg-after 30 -- ./scripts/integration-test
+ctx diff "$RUN" "$AFTER"
 ```
 
-If the process outlives the foreground window, the command returns a `job:<id>` handle.
-Continue working, then request a bounded tail:
+For a slow suite, use `ctx run --bg-after 30 -- python -m pytest`. If the
+suite is still running after 30 seconds, the response gives you a job ID. Run
+`ctx job "$JOB" --wait` with that ID to get the final digest.
 
-```bash
-ctx job <id>
-ctx job <id> --wait
-```
+## Hand off an investigation
 
-A finalized job becomes an ordinary run artifact, so the same search, retrieval, and
-diff operations apply.
+Give the next worker the finding, the evidence address and line range, the
+searches that returned no matches, and any open question. In a shared workspace
+the worker can open the same snapshot or captured run. The bundled
+`ctx-explorer` agent uses this handoff format. For a different workspace,
+export the cited artifacts with `ctx capsule export`, then import them there.
+[Evidence capsules](CLI.md#evidence-that-travels-ctx-capsule) · [ACP orchestration](ACP.md)
 
-### Why it helps
+For a repair that spans several turns, `ctx task prepare`, `run`, and `resume`
+share a task ledger and budget. The controller records observations, invokes
+the configured worker for analysis, and checks its patch against the specified
+tests. [Investigate and verify a repair](TASK-EXECUTION.md)
 
-Model latency is removed from the process critical path. The transcript records stable
-state transitions rather than a polling conversation.
+## Bound a verbose connector result
 
-## 4. The conclusion is in the tail—or one anomaly is in the middle
+With a host that supports tool-result replacement, Straitjacket can return a
+digest of a large text result and an address for retrieving more. Antigravity
+CLI can intercept supported calls before execution but cannot replace an
+arbitrary connector response after it returns. Check the host's capabilities
+before relying on interception. [Host capabilities](HOST-CAPABILITIES.md)
 
-### The failure mode
+## Measure exploration cost
 
-Many CLIs print progress first and conclusions last. Head-only truncation preserves
-startup ceremony while dropping the result. Conversely, a rare operational anomaly may
-occur once in the middle of 20,000 repetitive lines.
-
-### The bounded path
-
-```bash
-ctx run -- ./service-load-test
-```
-
-The text profile keeps a head/tail window. Log-oriented profiles group recurring
-templates and surface structurally rare lines. Omitted regions receive spans rather than
-being discarded.
-
-### Why it helps
-
-straitjacket treats position and rarity as selection signals and keeps the underlying
-bytes intact, so an omitted region stays retrievable instead of being lost.
-
-## 5. You need the delta, not two transcripts
-
-### The failure mode
-
-After an edit, the agent reruns a command and manually compares two large digests or raw
-outputs. Duplicate evidence dominates the context; the behavioral change is implicit.
-
-### The bounded path
-
-```bash
-ctx diff run:8d8335db6848 run:5a67c9de0123
-```
-
-The useful output is a delta census:
-
-- exit or signal changes;
-- failures added, removed, or changed;
-- log templates appearing or disappearing;
-- stream-size changes;
-- exact coordinates for evidence new in the second run.
-
-### Why it helps
-
-Verification asks a comparative question. A comparative operator should answer it
-directly instead of asking the model to implement a diff in attention.
-
-## 6. A sub-agent explores on behalf of the parent
-
-### The failure mode
-
-Inline delegation floods the parent. Summary-only delegation saves context but makes
-claims unauditable.
-
-### The bounded path
-
-The `ctx-explorer` agent reports in checkpoint shape:
-
-1. conclusion;
-2. cited evidence handles and coordinates;
-3. searches attempted, including negative searches;
-4. unresolved claims explicitly labeled as hypotheses.
-
-The parent can spot-check any claim:
-
-```bash
-ctx get <handle>
-```
-
-### Why it helps
-
-Delegation becomes quarantine with provenance. The parent receives the result, not the
-fork’s entire working memory, without accepting an evidence-free conclusion.
-
-## 7. A connector returns a giant structured payload
-
-### The failure mode
-
-Repository, cloud, browser, and MCP tools can return thousands of objects in one call.
-The model often needs a census, a filtered subset, or one exact object—not the entire
-serialization on every later round.
-
-### The bounded path
-
-Intercept the result at entry, store the complete payload, and emit a shape-aware digest:
-
-- schema or column census;
-- result count and coverage;
-- ranked exceptional rows;
-- stable object identities;
-- continuation handles for the complete result set.
-
-### Why it helps
-
-The transcript carries queryable identity, not connector payload residency.
-
-## A useful success criterion
-
-Containment is successful only when it preserves task-relevant evidence. Track both:
-
-```text
-containment ratio = 1 - visible tool-output tokens / raw tool-output tokens
-
-evidence preservation = tasks solved with containment / tasks solved natively
-```
-
-A small digest with poor decisive-evidence recall is not an optimization. The target is
-high containment **at matched or better task success**, with every omission in
-a captured digest declared and resolvable while its artifact is retained.
-
----
-
-[Getting started](GETTING-STARTED.md) · [CLI guide](CLI.md) · [Concepts](CONCEPTS.md) · [Why straitjacket](WHY-STRAITJACKET.md)
+Compare the same tasks, model, and acceptance checks with and without
+Straitjacket. Record task pass rate, tool calls, repeated reads, wall time, and
+provider-reported usage or cost per accepted task. A shorter result helps when
+the agent can still find the evidence required to finish.

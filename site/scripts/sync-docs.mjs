@@ -37,6 +37,11 @@ const RAW_AGENTS = `https://raw.githubusercontent.com/${OWNER_REPO}/main/assets/
 // [ source filename, site slug, title, description ]
 const PAGES = [
   ['AGENT-INTEGRATIONS.md', 'guides/agent-integrations', 'Agent integrations', 'Keep your agent: connect Hermes, OMP, OpenCode, and DeepSeek Harness.'],
+  ['HARNESS-COLLABORATION.md', 'guides/harness-collaboration', 'Delegate across harnesses', 'Choose a worker transport and pass evidence between coding agents.'],
+  ['ROUTING.md', 'guides/routing', 'Route work by harness and model', 'Preview a route, select eligible workers, and inspect the result.'],
+  ['CODE-SEARCH.md', 'guides/code-search', 'Find code by symbol', 'Locate definitions, references, and relevant source ranges.'],
+  ['QUERY-AWARE-SELECTION.md', 'guides/query-aware-selection', 'Select evidence and reuse a prompt prefix', 'Separate fixed reference text from changing evidence and questions.'],
+  ['NATIVE-AGY-SESSIONS.md', 'guides/native-agy-sessions', 'Run a Gemini model in Antigravity', 'Choose an available model and continue a native Antigravity conversation.'],
   ['ACP.md', 'guides/acp', 'ACP orchestration', 'Configure agent endpoints, permissions, and verified edit tools.'],
   ['EDIT-LOOP.md', 'guides/edit-loop', 'Edit and verify', 'Observed source, anchored edits, verification, and evidence-gated continuation.'],
   ['LSP.md', 'guides/lsp', 'Language servers', 'Reused semantic queries, fresh diagnostics, and guarded rename and code-action plans.'],

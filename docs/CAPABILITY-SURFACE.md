@@ -1,289 +1,139 @@
-<sub><a href="README.md">« straitjacket / docs</a></sub>
+# Choose which skills and tools a harness sees
 
-# Capability surface — the input side of containment
+A skill gives a coding agent instructions. An MCP server gives it callable
+tools. A delegated task gives a worker a goal. Each enters the session through
+a different interface.
 
-> **Design & internals — not product documentation.** This doc explains *why* a
-> mechanism exists and how it was reasoned out; it may describe an idea before it
-> ships or record one that was rejected. For what the product does **today**,
-> prefer [`spec/`](../spec/) and the [changelog](../CHANGELOG.md), and read any
-> status label literally. New to the vocabulary? Read
-> [How it works](HOW-IT-WORKS.md) and [Concepts](CONCEPTS.md) first.
-
-straitjacket has always contained the **output** side: unbounded tool output
-becomes a bounded, addressable digest. The capability surface is the symmetric
-**input** side — everything the host tells the model it *can do*, re-sent every
-turn before any tool is called.
-
-```
-CAPABILITY CONTAINMENT   what the model is told it can do   (input)
-EVIDENCE CONTAINMENT     what the model is shown after doing it   (output)
-```
-
-The governing law is one sentence:
-
-> Do not place a capability, or its evidence, in context until the current
-> task has earned the cost and the authority.
-
-A 400-token MCP tool schema shown across 30 turns is 12,000 token-turns of tax
-whether or not it is ever used. Tool count also degrades selection: a cheap
-model with a clean 6-tool surface often beats a strong model drowning in 70
-tools and 20k tokens of irrelevant instructions. Capability containment
-attacks both.
-
-## Preventive by default: bound *before* bloat
-
-The point was never to measure bloat already in context — it was to stop it
-entering. Two mechanisms make the audit preventive, mirroring the output side's
-"capture before flood":
-
-- **Pre-flight gate.** A hook on all three hosts (Claude `SessionStart`, Codex
-  `SessionStart`, Antigravity `SessionStart` when the payload carries `hookEventName` (added in
-  `agy` 1.5.4; observed on 1.5.5 only), where the advisory is injected once as a `systemMessage` step that stays
-  in the conversation; an older `agy` may have no SessionStart, and there the
-  advisory rides `PreInvocation` as an `ephemeralMessage` so it does not
-  accumulate across invocations) runs the audit *before the first turn*,
-  with a cached MCP probe so it sees the real tool-
-  schema cost. If the discretionary surface exceeds `[surface]
-  max_static_tokens` in `ctx.toml`, it injects a bounded advisory naming the
-  heaviest kinds, unused high-authority tools, broken dependencies, and the
-  cheaper path. The probe is cached in `.ctx-surface/probe-cache.json` — first
-  session ~6s, every session after ~0.08s.
-- **Gateway as the MCP delivery.** `ctx wrap <host> --gateway` (or `ctx
-  surface install-gateway --host <h> --apply`) points a host at **one** MCP
-  server — `ctx surface gateway` — instead of the individual servers. It
-  snapshots the backends to `.ctx-surface/backends.json` (the gateway reads
-  them from there; the host loads only the gateway via a separate config file,
-  never a rewrite of yours). At turn 1 the model sees only the compact index +
-  `reveal`/`hide`; the thousands of tokens of tool schemas are **never sent**
-  until a family is revealed. This is the only mechanism that makes it
-  structurally impossible for unrevealed capability schemas to reach context.
-
-`[surface]` in `ctx.toml`: `max_static_tokens` (8000), `gate` (off|warn),
-`default_profile`, `gateway` (bool), `probe` (bool), `wrap` (auto|off) and
-`wrap_min_sessions` (5). See [Configuration](CONFIGURATION.md).
-
-## Applied at launch: `ctx wrap claude --surface`
-
-The gate warns and the gateway has to be wired. A third mechanism applies a plan
-when `ctx wrap claude` launches a session, so the up-front cost of MCP servers and
-skills falls without anyone running an audit first. The flags and the receipt are
-in the [CLI guide](CLI.md#shrink-the-launch-surface---surface); the rules it keeps
-are these.
-
-- **Host first.** Claude Code already defers MCP tool schemas (tool search) and lists
-  skills by name and description only. Where those mechanisms hold, `--surface auto`
-  interposes nothing: it never routes MCP through the gateway. Whether deferral
-  holds is read from the environment the session will run in, and the receipt names
-  the reason.
-- **Evidence, never a guess.** A skill is narrowed to `name-only` (name listed,
-  description dropped, set through `skillOverrides`) only when this project's own
-  Claude Code transcripts show zero invocations of it, and only once the transcripts
-  hold `wrap_min_sessions` complete sessions. No transcripts is no evidence and
-  changes nothing. Nothing is turned off in `auto`, ctx's own skill is never touched,
-  and a skill the user already overrode is left alone. Claude Code merges
-  `skillOverrides` from `--settings` key by key with the user's own settings
-  (observed on 2.1.322).
-- **The caller wins.** `--mcp-config`, `--strict-mcp-config`, a caller `--settings`,
-  or the deferral and skill-budget environment variables leave that dimension alone;
-  a managed MCP configuration is detected and `--mcp-config` is never passed.
-- **Ephemeral.** Everything rides the temporary settings file, extra flags and
-  private temporary files, removed after the session. The only file written to the
-  workspace is `.ctx-surface/wrap-receipt.json` (`ctx.surface.wrap/v1`), and one line
-  on stderr says what was done and what was left alone. Every figure in it is an
-  estimate, labelled as one.
-- **A profile is chosen on the command line only.** A profile launch passes
-  `--mcp-config`, and servers loaded that way skip Claude Code's project trust
-  prompt, so a `ctx.toml` that names a profile is ignored: a cloned repository
-  cannot choose one for you. A profile never starts a project server Claude Code
-  would not have started.
-- **Never starts servers by itself.** Measurement for the plan reads the probe cache
-  that `ctx surface inventory --probe-mcp` fills; the launch does not spawn a server
-  to find out what it costs. A server that was never probed is named as unmeasured,
-  not priced at a guess.
-- **A per-tool restriction is enforced or the server is left out.** A profile that
-  excludes one tool of a server, names single tools in `include`, or sets an authority
-  ceiling that drops some tools of a kept server, is enforced by routing that server
-  through `ctx surface gateway` with an allow-list built from the probe cache. When
-  that cannot be done (no cached tool catalogue, or a remote server the gateway does
-  not proxy) the whole server is left out of the session, and the stderr line, the
-  receipt and the profile note say so and name the remedies. Before this rule, such a
-  profile left the excluded tool listed and callable while the receipt reported the
-  profile as applied.
-
-Discovery for the plan, and for the audit, now also lists user-scope and local-scope
-Claude Code servers, user skills and agents, Codex user configuration, and remote
-servers by transport. Listing never spawns or copies a server, and workspace files
-never receive a user-scope server definition. Pricing uses the basis that applies to
-the host and names it: a skill costs its listing entry, not its whole file
-(`ctx.surface/v2`). A server command is rendered as program, argument count and flag
-names only; no argument value reaches the output, and launch files are `0600`.
-
-The gateway exposes three tools: `surface_index` (with an optional `query` that
-finds matching tools without revealing them), `surface_reveal` and `surface_hide`,
-each taking a family, or a server or tool `target`. Backend environment values are
-rehydrated from the user's own configuration when the backend starts, and are not
-stored in the snapshot.
-
-## Commands
-
-```
-# measure (Phase 1–2) — never mutates anything
-ctx surface inventory        # every capability, priced, with usage + flags
-ctx surface audit            # the summary scorecard
-ctx surface explain <id>     # why one capability is visible, its cost + authority
-ctx surface trim             # preview-only defer recommendations
-ctx surface graph            # families, redundancy clusters, broken dependencies
-ctx surface inventory --probe-mcp   # spawn MCP servers to measure real schema tokens
-
-# compile (Phase 3) — the enforced cross-host boundary
-ctx surface compile --profile local-dev --host claude [--apply]
-ctx surface compile --profile read-only --host codex --apply
-ctx surface compile --profile review    --host antigravity --apply
-
-# disclose at runtime (Phase 4) — MCP gateway
-ctx surface gateway          # stdio MCP server: index + reveal/hide + proxied backends
-
-# reconcile (Phase 5) — shadow by default
-ctx surface reconcile --intent "open a PR"   # recommend reveals/hides (logs shadow)
-ctx surface reconcile --enforce              # apply through gateway state
-ctx surface referee                          # score shadowed hides; promote/hold
-
-# preventive wiring — make it 'bound before bloat'
-ctx setup --prune                            # set up, then defer what this repo does not use
-ctx prune [--apply] [--host H] [--keep ID]   # the same decision on its own; preview by default
-ctx wrap setup --gateway                     # set up all 3 hosts + load ONLY the gateway
-ctx surface install-gateway --host claude --apply   # gateway-only config for one host
-# (the SessionStart gate is installed automatically by ctx wrap on every host)
-```
-
-## What it audits (and the honest blind spot)
-
-The unit is any **persistent context-bearing capability**, not just a tool:
-
-| Kind | Source it reads |
+| What you need | How to do it |
 |---|---|
-| `mcp_server` / `mcp_tool` | `.mcp.json`, `.claude/settings.json`, `.codex/config.toml`, `.agents/plugins/*/mcp_config.json`, plus user-scope and local-scope Claude Code servers and Codex user configuration |
-| `skill` | `.claude/skills/**`, `.agents/**/skills/**`, `.cursor/rules/**`, plus user skills |
-| `agent` | `.claude/agents/*.md`, `.agents/**/agents/*.md`, plus user agents |
-| `repo_instructions` | `CLAUDE.md`, `AGENTS.md`, `.cursorrules`, `GEMINI.md`, copilot-instructions |
-| `policy` | `ctx.toml`, `ctx-policy.toml` |
+| See which skills contribute to the prompt | Run `ctx surface inventory --json`. For a recognized skill listing, `tokens` estimates the name and description. `deferred_tokens` estimates the body loaded on use. |
+| Find a missing tool named by a skill | Run `ctx surface graph`. A reference such as `mcp__github__create_pull_request` points to the required server. A missing provider appears under broken dependencies. |
+| Reduce the skill descriptions Claude Code carries between turns | Launch with `ctx wrap claude --surface auto -- …`. Skills with no observed use can keep just their names in the listing. |
+| Give another harness work that requires a skill | Make the skill available to that harness and name it in the node's goal. The receiving harness decides whether to invoke it. [Route and delegate a task](HARNESS-COLLABORATION.md). |
 
-**Blind spot, stated in the tool itself:** ctx cannot see the host's built-in
-system prompt or native tool schemas (Read/Edit/Bash/Grep/Glob) — those live
-inside the host binary/API, not in any file. The audit covers the
-**discretionary** surface, which is exactly where over-provisioning,
-redundancy, and capability leakage actually accumulate.
+## Route a task that needs a skill
 
-## What it measures
+In a `ctx.route/v1` graph, `role`, `needs`, and `min_tier` describe the
+worker the task requires. A `host` or `model` pin requests a particular
+worker. The route has no skill selector. ACP starts a worker in the specified
+workspace and supplies a prompt and session-scoped MCP tools. Skills follow the
+receiving harness's own installation and discovery rules.
 
-**1. Static token cost.** Every capability's contribution, deterministically
-(`estimate_tokens`, ~4 bytes/token — no tokenizer dependency, byte-identical
-across runs). For MCP servers the registration line is cheap; the real tax is
-the tool schemas, measured only under `--probe-mcp`, which speaks MCP over
-stdio (`initialize` → `tools/list`) to each server and prices each tool's
-name + description + JSON schema. On our own bounded server that is the
-difference between a 12-token registration line and the 490-token tool schema
-— a 40× truer number.
+For example, suppose a review worker needs your project's release checklist.
+Install that skill on the worker's host and name the checklist in its goal.
+If every worker must follow the same revision, commit the checklist to the
+workspace and put its `repo:` path and expected checks in the goal. The worker
+can read that file directly through bounded retrieval. [Worker selection](ROUTING.md)
+and [ACP sessions](ACP.md) describe the handoff.
 
-**2. Utilization.** ctx sits in the hook path, so it already observes every
-tool invocation. `ctx surface` folds the proxy wire log's per-tool counts back
-onto the inventory: *"github.search_code — 418 tokens/turn, invoked 0 times
-across N sessions."* That attribution is ctx's structural advantage; nothing
-else sits where it can price a capability *and* see whether it was used.
+Straitjacket's own Antigravity skill uses the same distinction. It points the
+agent to the [command routing policy](../plugins/antigravity/skills/ctx-harness/references/routing-policy.md)
+when deciding whether an operation needs bounded output, and to the
+[collaboration instructions](../plugins/antigravity/skills/ctx-harness/references/harness-collaboration.md)
+when splitting work across workers. The host loads each reference when needed.
 
-**3. Authority.** A real property of **tools** (read → local-write →
-remote-write → destructive), inferred from name and description. Prose (skills,
-agents, instructions) has no authority of its own — it is `n/a`. A skill is not
-"destructive" because it contains the word *delete*.
+## Inspect the workspace
 
-**4. Leakage**, classified rather than merely scanned:
-
-- `excessive-authority` — an action tool that can mutate/destroy but is never used;
-- `capability-mention:<tier>` — prose that surfaces a high-authority action into planning (behavioural/capability leakage — a skill *describing* deploy/delete biases tool choice even when denied at call time);
-- `unrelated-domain:<domain>` — cloud/db/collaboration surface on a code task;
-- `secret-adjacent` — env-var *names*, internal URLs, absolute paths, token shapes (the underscore rule keeps `GEMINI_API_KEY` in and ordinary acronyms like `README` out).
-
-**5. Overlap** — descriptive clustering by shared capability key
-(search/read/write/…). Marked shadow on purpose: semantic similarity is **not**
-interchangeability (local-only ≠ remote-capable ≠ mutation-capable).
-
-**6. Recommended disclosure level** (advisory) — L0 always-visible kernel
-(ctx's own bounded tools, policy, repo steering) through L4 (destructive,
-user-approval-gated). Computed from authority × utilization; never enforced in
-Phase 1.
-
-## Dogfooded on this repo
-
-```
-SESSION SURFACE AUDIT
-────────────────────────────────────────────────────────
-Discretionary context (host kernel excluded — blind spot):
-  skill                5 ·   4,664 tok
-  agent                1 ·     638 tok
-  policy               1 ·     180 tok
-  mcp_server           1 ·      12 tok      (490 tok under --probe-mcp)
-  TOTAL                8 ·   5,494 tok/turn
-Leakage flags: 4 capabilities
-  skill.SKILL: capability-mention:remote-write
-  agent.ctx-explorer: capability-mention:destructive
-  skill.routing-policy: unrelated-domain:database
-Preview-trim candidates: 1 · ~638 tok/turn recoverable (advisory — nothing hidden)
+```bash
+ctx surface inventory --json
+ctx surface audit
+ctx surface graph
+ctx surface trim
 ```
 
-Receipt: [`evals/surface-audit-2026-07-20.md`](../evals/surface-audit-2026-07-20.md).
+The inventory covers project MCP registrations, repository instructions, agent
+definitions, and skill files under `.claude/skills/`, `.agents/**/skills/`,
+and `.cursor/rules/`. It also reads user-level Claude Code skills and agents,
+Claude Code local and user MCP registrations, and Codex user MCP configuration.
+Built-in host prompts and native tool schemas are outside its view.
 
-## The five phases (all shipped)
+Use an ID from the inventory with `ctx surface explain <id>` to inspect its
+source, estimated size and authority. Recognized `SKILL.md` listings and their
+reference files are priced separately. A reference file contributes zero
+up-front tokens and carries a deferred estimate. For MCP tools, run
+`ctx surface inventory --probe-mcp` to start configured stdio servers and
+measure their advertised schema sizes. Counts use an estimate of about four
+bytes per token. The host's disclosure mode determines how much of a schema
+appears up front.
 
-| Phase | What | Mutation? |
-|---|---|---|
-| 1 | inventory · accounting · utilization · overlap/leakage shadow · preview trim · MCP probe | none |
-| 2 | dependency + overlap graph — families, `provides`/`requires`, redundancy clusters, broken dependencies | none |
-| 3 | compile-time profiles (`ctx surface compile`) with dep-closure / provider / authority / budget checks → **minimal per-host config** | writes config on `--apply` |
-| 4 | progressive-disclosure **MCP gateway** — compact family index + `reveal`/`hide` + `tools/list_changed`, proxying live backends | gateway state only |
-| 5 | automatic reconciliation — hide unused high-cost family after a phase, reveal on intent; **never** remove a required or kernel family | shadow by default; `--enforce` opt-in |
+The audit flags overlapping names, unused high-authority tools and references
+to unavailable servers. It infers authority from tool names and descriptions.
+Skills and instructions carry no execution authority of their own.
+`ctx surface trim` previews what could be deferred. `ctx prune` can compile
+a selection into host-specific MCP configuration. [CLI reference](CLI.md).
 
-Each phase's referee is its acceptance gate: Phase 1–2 are measurement (no
-gate needed); Phase 3's checks must be clean before a config is trusted;
-Phase 5 ships **shadow-first** with a paired referee (`ctx surface referee`)
-that promotes a hide rule only once it never mis-hid a family used afterwards.
+## Narrow the Claude Code skill listing
 
-## Enforcement per host (the honest matrix)
+From the project where you use Claude Code, launch a session with a task:
 
-Research finding: the only surface bound *every* host respects is set at
-compile/launch time. Dynamic reveal is a best-effort affordance on top.
+```bash
+ctx wrap claude --surface auto -- -p "Locate the parser entry point."
+```
 
-| Host | Compile (Phase 3) — enforced | Gateway reveal (Phase 4) — in-session? |
-|---|---|---|
-| **Claude Code** | `--strict-mcp-config --mcp-config .ctx-surface/mcp.claude.json` + `permissions.deny mcp__<dropped>__*` | **Yes** on the normal tool path (honours `list_changed`, v2.1+); the ToolSearch/deferred index does not refresh — reconnect to pick those up |
-| **Codex** | `.ctx-surface/config.codex.toml` — only selected `[mcp_servers.*]` at startup | **No** — startup snapshot; a reveal applies after restart |
-| **Antigravity** | `.ctx-surface/mcp_config.antigravity.json` — minimal servers | **Manual** — a reveal applies after the MCP *Refresh* |
+This starts Claude Code using its configured account. The launch plan reads
+this project's transcripts. After at least five complete sessions by default,
+a skill with zero observed invocations is eligible for a `name-only`
+override. Its description leaves the listing and its name stays available.
+Used skills, new skills added since the latest transcript, the `ctx-harness`
+skill and existing user overrides keep their settings.
 
-**Config gates servers; only the gateway gates tokens per-tool.** Measured on
-two live reference MCP servers ([`evals/surface-real-2026-07-20.md`](../evals/surface-real-2026-07-20.md)):
-a `read-only` profile that keeps two servers (each has read tools it needs) but
-defers 17 of their tools saves only **−99 tok** by whole-server config, versus
-**−1,654 tok (~53%)** through the gateway — because a Claude `permissions.deny`d
-tool is still *listed* to the model, so it still costs context. `ctx surface
-compile` therefore reports **both** numbers and never claims the per-tool
-figure for a host config that can't deliver it.
+Read `.ctx-surface/wrap-receipt.json` to see each skill's decision and reason,
+the transcript coverage, and estimated listing sizes before and after the
+change. The wrapper passes overrides through temporary settings for that
+session. Set `[surface] wrap_min_sessions` to change the evidence floor or
+pass `--surface off` to skip planning for one launch. This skill-listing
+policy applies to Claude Code. [Launch flags and caller overrides](CLI.md#shrink-the-launch-surface---surface).
 
-Wire the gateway on any host by registering **one** MCP server pointing at
-`ctx surface gateway` instead of the individual servers — it fronts them all,
-starts with just the index, and reveals per family. The ctx bounded retrieval
-tool rides along automatically (the `harness` family is kernel, always
-revealed). Everywhere the gateway is a single bounded entry point; only where
-the client honours `list_changed` is the reveal *live* rather than
-apply-on-reconnect. That is the same machinery that compiles a minimal
-capability slice per delegated worker (coordinator / editor / explorer)
-instead of duplicating a 30k-token surface into each.
+## Limit MCP tools at launch
 
-## Why this composes
+```bash
+ctx surface compile --profile read-only --host claude
+ctx surface compile --profile local-dev --host codex
+ctx surface compile --profile review --host antigravity
+```
 
-The set-cover framing — *task requires logical capabilities; each tool provides
-a subset at a token/authority/confusion cost; choose the smallest adequate
-surface* — is the eventual Phase 4 optimizer. Phase 1 deliberately builds the
-**telemetry that optimizer will need** (real per-tool cost × observed use)
-before building the optimizer, and the same audit becomes the substrate for
-model routing: *cheap model succeeds at ≤8 tools / ≤4k schema tokens; strong
-model required above that.* Capability auditing is not separate from routing —
-it is the prerequisite.
+These commands preview the servers and tools a profile selects. Add
+`--apply` to write launch configuration under `.ctx-surface/`. The report
+names excluded servers and any problems with dependencies, authority or
+schema budget. Built-in profiles are `read-only`, `local-dev`, `review` and
+`full`. Define additional ones in `[surface.profiles.<name>]` in `ctx.toml`.
+[Profile configuration](CONFIGURATION.md).
+
+For a Claude Code session, `ctx wrap claude --surface read-only -- …` applies
+the chosen profile at launch. A CLI profile can limit individual tools on a
+stdio server through a gateway allow-list built from cached tool schemas.
+When the wrapper cannot enforce that restriction, it omits the server and
+records the reason. Explicit caller settings take precedence. The default
+`auto` mode uses Claude Code's own MCP tool deferral.
+
+The startup hook can also warn when estimated up-front context exceeds
+`[surface] max_static_tokens` (8,000 by default). Claude Code and Codex receive
+the advisory at session start. On Antigravity it uses `SessionStart` where
+supported and `PreInvocation` on older hook contracts.
+[Host capabilities](HOST-CAPABILITIES.md).
+
+## Reveal MCP tools on demand
+
+`ctx surface install-gateway --host claude` previews the gateway configuration.
+Add `--apply` to write it. Point the host at the generated configuration and
+launch with the gateway as its MCP server. The model can search the gateway's
+index with `surface_index`, reveal a family, server or tool with
+`surface_reveal`, and remove it from the listing with `surface_hide`.
+The core bounded retrieval family stays visible.
+
+| Host | When the client sees a gateway change |
+|---|---|
+| Claude Code | The normal tool list refreshes on `list_changed`. Reconnect to refresh the deferred ToolSearch index. |
+| Codex | Restart the session to load a new tool list. |
+| Antigravity | Use MCP Refresh to load a new tool list. |
+
+`ctx surface reconcile --intent "open a PR"` records recommended changes.
+Pass `--enforce` to apply the recommendations to gateway state.
+`ctx surface referee` scores previous hide recommendations against later use.
+
+A test against two live reference MCP servers illustrates the distinction.
+Both supplied read tools, so the read-only profile kept both servers. Dropping
+whole servers and other excluded listings reduced the estimated surface by
+99 tokens. Filtering out 17 individual tools reduced it by 1,654 tokens on
+the same inventory. Those figures describe the listed schemas in that run.
+[Measurement and method](../evals/surface-real-2026-07-20.md).

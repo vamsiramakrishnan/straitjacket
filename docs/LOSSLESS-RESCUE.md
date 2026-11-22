@@ -72,9 +72,9 @@ intact on disk with its facts, `rescued: 1..5` disclosed on the wire, and
 the model finished with **10/10 facts correct**, including facts whose
 transcript blocks had been elided. Success under rescue, zero loss.
 
-**Where this leaves the comparison:** the rewriting proxy's remaining
-advantages are zero-integration generality (any client, no workspace) and
-its memory features — both out of scope by principle, not capability. On
-transcript economics there is no remaining regime where it wins on our
-hosts: prevention (gates) for the common case, lossless epoch rescue for
-the tail, both cache-stable.
+**Cost in a coding session.** In one capped 60-turn cattrs run, rescue
+removed 18 old results and cut cache reads from 2.29M to 2.02M tokens.
+Cache writes rose from 57k to 78k. The wrapped session cost $0.48 with rescue
+off and $0.49 with it on. Rebuilding the prefix can absorb the savings from
+carrying a smaller transcript. Compare runs on task completion as well as
+usage. [DeepSWE receipt, iteration 3](../evals/agentbench/deepswe-2026-09-13.md)

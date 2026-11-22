@@ -69,6 +69,8 @@ class ModelChoice:
     # wants the alias `haiku`, not `claude-haiku-4.5`; the Gemini API serves
     # `gemini-3.1-pro-preview`). Defaults to `id`.
     cli_id: str = ""
+    # New models with account-dependent access require an explicit selection.
+    opt_in: bool = False
 
     @property
     def launch_id(self) -> str:
@@ -164,6 +166,17 @@ class HostSpec:
         return max((m.tier for m in self.models), key=tier_rank)
 
 
+# Base IDs accepted by Antigravity and the Gemini API. The native CLI also
+# advertises effort-specific slugs through `agy models`. An installed binary
+# alone does not establish entitlement to any of these models.
+_GEMINI_4 = (
+    ModelChoice("gemini-4-hydrogen", "standard", ("implement", "edit", "verify"), opt_in=True),
+    ModelChoice("gemini-4-neon", "frontier", ("implement", "reason", "review"), opt_in=True),
+    ModelChoice("gemini-4-carbon", "frontier", ("plan", "reason", "architect"), opt_in=True),
+    ModelChoice("gemini-4-argon", "frontier", ("plan", "reason", "review"), opt_in=True),
+)
+
+
 # ---------------------------------------------------------------------------
 # The registry. Order is display order (fully wired hosts first). The three
 # shipped hosts carry real installers/wrappers; the rest are detected and
@@ -198,6 +211,7 @@ _REGISTRY: tuple[HostSpec, ...] = (
         # modeled here). Flash is a capable *implementation* model, not just
         # explore — the whole point of routing by model.
         models=(
+            *_GEMINI_4,
             ModelChoice("gemini-3.1-pro", "frontier", ("plan", "reason", "review", "architect"),
                         cli_id="gemini-3.1-pro-preview"),
             ModelChoice("gemini-3.6-flash", "standard", ("implement", "edit", "code", "summarize")),
@@ -208,22 +222,12 @@ _REGISTRY: tuple[HostSpec, ...] = (
         ),
         strengths=("search", "triage", "verify", "implement", "summarize", "explore"),
         coordinator_model="gemini-3.5-flash-lite",
-        notes="built-for host; Gemini flash implements cheaply; no output gate "
-              "(PostToolUse can only emit {}), birth gate denies rather than rewrites",
+        notes="native Antigravity CLI; rewrites supported tool inputs, "
+              "cannot replace tool output; opt-in ACP for unattended routing",
     ),
     HostSpec(
-        # The same vendor and models as `antigravity`, reached a different way:
-        # ctx's own agent built on the google-antigravity SDK rather than the
-        # `agy` CLI. It is a SEPARATE host on purpose. `agy` is Google's program
-        # and we only hook it; this one is ours, so conflating them would let a
-        # single "antigravity" row report two different capability sets and
-        # would silently substitute our implementation for the vendor's.
-        #
-        # It exists because `agy` cannot be harnessed: OAuth-only auth means
-        # nothing can script it, and its hook contract can substitute neither
-        # input nor output. Here containment lives in the tool implementations,
-        # so both gates hold — which is why the substitution flags below are
-        # True while the `antigravity` row above has them False.
+        # This host runs the ctx-owned Agent SDK worker. It uses its own API
+        # credentials and returns bounded results directly from its tools.
         name="antigravity-sdk",
         cli_bins=("ctx-agy",),
         default_model="gemini-3.6-flash",
@@ -243,6 +247,7 @@ _REGISTRY: tuple[HostSpec, ...] = (
         model_flag="--model",
         vendor_hint="google",
         models=(
+            *_GEMINI_4,
             ModelChoice("gemini-3.1-pro", "frontier", ("plan", "reason", "review", "architect"),
                         cli_id="gemini-3.1-pro-preview"),
             ModelChoice("gemini-3.6-flash", "standard", ("implement", "edit", "code", "summarize")),
@@ -433,7 +438,8 @@ class DetectedHost:
 
     @property
     def models(self) -> tuple[ModelChoice, ...]:
-        return self.spec.models
+        """Candidates for automatic routing. A named route pin uses spec.model()."""
+        return tuple(m for m in self.spec.models if not m.opt_in or m.id == self.model)
 
     @property
     def output_dollars_per_mtok(self) -> float:

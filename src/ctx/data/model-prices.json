@@ -1,14 +1,19 @@
 {
   "schema": "ctx.model-prices/v1",
-  "updated": "2026-07-20",
+  "updated": "2026-11-22",
   "currency": "USD",
   "unit": "per_1m_tokens",
   "note": "Host-neutral published list prices, standard/paid tier, matched by the `match` string against the session model id on letter boundaries (see ctx/pricing.py). Entries are ordered specific->general; the first match wins, so version-specific rows precede tier-token fallbacks. Estimates only; a session's real spend is preferred from the host when it reports one (Claude Code cost.total_cost_usd). Antigravity/Gemini and OpenAI expose token usage but no dollar cost, so cost there is usage x this table. Refresh from each `source`; override per repo with a .ctx-prices.json on this schema at the workspace root (the only override seam — prices are data, not ctx.toml policy).",
+  "gemini_4_note": "Global standard API estimates before promotional credits. Google lists 50% credits for Carbon and Argon through November 30, 2026. An Antigravity subscription has its own quota/billing rules. Through January 11, 2027, write tokens are estimated at the uncached input rate. Google lists a separate global write price starting January 12 for Hydrogen ($1.875/M) and Neon ($3.75/M).",
   "models": [
     {"match": "opus",                  "vendor": "anthropic", "tier": "premium",  "in": 15.0, "out": 75.0, "cache_write": 18.75, "cache_read": 1.50, "source": "https://www.anthropic.com/pricing"},
     {"match": "sonnet",                "vendor": "anthropic", "tier": "standard", "in": 3.0,  "out": 15.0, "cache_write": 3.75,  "cache_read": 0.30, "source": "https://www.anthropic.com/pricing"},
     {"match": "haiku",                 "vendor": "anthropic", "tier": "economy",  "in": 1.0,  "out": 5.0,  "cache_write": 1.25,  "cache_read": 0.10, "source": "https://www.anthropic.com/pricing"},
 
+    {"match": "gemini-4-hydrogen",     "vendor": "google", "tier": "standard", "in": 1.50, "out": 7.50,  "cache_write": 1.50, "cache_read": 0.075, "source": "https://cloud.google.com/model-garden/pricing"},
+    {"match": "gemini-4-neon",         "vendor": "google", "tier": "premium",  "in": 3.00, "out": 15.00, "cache_write": 3.00, "cache_read": 0.15,  "source": "https://cloud.google.com/model-garden/pricing"},
+    {"match": "gemini-4-carbon",       "vendor": "google", "tier": "premium",  "in": 4.00, "out": 20.00, "cache_write": 4.00, "cache_read": 0.20,  "source": "https://cloud.google.com/model-garden/pricing"},
+    {"match": "gemini-4-argon",        "vendor": "google", "tier": "premium",  "in": 4.00, "out": 20.00, "cache_write": 4.00, "cache_read": 0.20,  "source": "https://cloud.google.com/model-garden/pricing"},
     {"match": "gemini-3.6-flash",      "vendor": "google", "tier": "standard", "in": 1.25, "out": 7.50,  "cache_write": 1.25, "cache_read": 0.12,  "source": "https://ai.google.dev/gemini-api/docs/pricing"},
     {"match": "gemini-3.5-flash-lite", "vendor": "google", "tier": "economy",  "in": 0.20, "out": 1.20,  "cache_write": 0.20, "cache_read": 0.03,  "source": "https://ai.google.dev/gemini-api/docs/pricing"},
     {"match": "gemini-3.5-flash",      "vendor": "google", "tier": "standard", "in": 1.50, "out": 9.00,  "cache_write": 1.50, "cache_read": 0.15,  "source": "https://ai.google.dev/gemini-api/docs/pricing"},

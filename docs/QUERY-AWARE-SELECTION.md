@@ -73,11 +73,48 @@ selector. It stores the original bytes and returns their retrieval address.
 `--require-line N` protects explicit evidence. An unsatisfied budget returns
 `needs_retrieval` (exit 3), rather than silently dropping required evidence.
 
-`--cache-prefix FILE` emits a deterministic reference prefix and a separate
-evidence/query suffix. Applications can send the same prefix before changing
-content to make provider prompt caching possible. This does not manipulate a
-model's KV cache, call a provider, or guarantee a cache hit. Keep instructions
-outside this reference-data wrapper.
+## Build a reusable prompt prefix
+
+Use `--cache-prefix` when your application assembles model requests. Give it
+stable reference data, such as the meaning of fields in a build log. Put the
+current log excerpts and the question after that reference. Keep instructions
+in the host's system message.
+
+This example runs entirely locally. It uses the same reference and evidence
+with two different questions.
+
+```sh
+work=$(mktemp -d)
+printf '%s\n' 'Build stages are compile, link and test.' > "$work/reference.txt"
+printf '%s\n' 'compile passed' 'link passed' 'test failed' > "$work/build.log"
+
+ctx compress "$work/build.log" --query "Which stage failed?" \
+  --cache-prefix "$work/reference.txt" > "$work/first.json"
+ctx compress "$work/build.log" --query "Did link pass?" \
+  --cache-prefix "$work/reference.txt" > "$work/second.json"
+
+python - "$work/first.json" "$work/second.json" <<'PYTHON'
+import hashlib
+import json
+import sys
+from pathlib import Path
+
+first, second = [json.loads(Path(p).read_text())["cache_wrap"] for p in sys.argv[1:]]
+assert first["prefix"] == second["prefix"]
+assert hashlib.sha256(first["prefix"].encode()).hexdigest() == second["prefix_sha256"]
+assert first["suffix"] != second["suffix"]
+PYTHON
+```
+
+Send the returned `cache_wrap.prompt` as reference data in your request, or
+use `prefix` and `suffix` in that order. Sending the entire CLI response would
+put changing metadata before the reference and repeat the evidence. The hash
+identifies the emitted prefix after the workspace's redaction policy. Model,
+host-supplied instructions, tool definitions and provider cache policy can
+still affect reuse. Check the provider's cache-read counters on real requests.
+[Measuring the whole task](HOW-IT-WORKS.md#measure-the-whole-task)
+
+## Selection experiments
 
 The experimental `block-selection` AlphaEvolve search can change only `rank_blocks(items)`.
 Candidates receive numeric features, not source text, answer labels, or test

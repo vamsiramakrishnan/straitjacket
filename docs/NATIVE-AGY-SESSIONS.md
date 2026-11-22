@@ -1,11 +1,61 @@
-# Native agy sessions
+# Native Antigravity sessions
 
-`ctx collab` coordinates provider-native agy turns. The existing `ctx task`,
-`ctx orchestrate`, ACP transport, and relay remain the general harness runtime.
-Use native sessions when preserving an explicit agy conversation is required.
-The selected model must be advertised by your installed `agy models` command.
+Use `ctx collab` when a worker needs to keep a native Antigravity conversation
+across turns. Use [ACP](ACP.md) to delegate independent tasks across harnesses.
 
-Create a scoped task, claim it, and launch a read-only review:
+## Choose a Gemini model
+
+Run `agy models` in the account that will do the work. Copy a slug from its first
+column, including the thinking level. Google documents these four model families.
+Availability depends on your account and plan.
+
+| Model | Example native CLI slug | SDK model ID | Suggested work |
+|---|---|---|---|
+| Hydrogen | `gemini-4-hydrogen-high` | `gemini-4-hydrogen` | Implement a scoped edit and run its tests |
+| Neon | `gemini-4-neon-high` | `gemini-4-neon` | Debug or review a change across files |
+| Carbon | `gemini-4-carbon-high` | `gemini-4-carbon` | Plan a complex change with several dependencies |
+| Argon | `gemini-4-argon-high` | `gemini-4-argon` | Reason through an architecture decision or a difficult bug |
+
+The work suggestions are routing heuristics. Google publishes the account lookup
+and slug syntax in the [headless CLI reference](https://antigravity.google/docs/cli/headless/),
+the [model picker](https://antigravity.google/docs/models), and its
+[model ID table](https://antigravity.google/docs/enterprise#supported-models-in-gemini-enterprise).
+
+**Native CLI.** Install the workspace integration with `ctx setup --host antigravity`.
+Start an interactive session with the exact slug, or pass it to `ctx collab launch`
+to record the conversation and result.
+
+```sh
+agy models
+agy --model gemini-4-neon-high
+```
+
+**ACP worker.** An ACP adapter advertises its own exact IDs. For example, if the
+adapter advertises `gemini-4-neon`, use the following configuration. Straitjacket
+checks the ID when it opens the session and fails before sending the task if the
+adapter does not offer it.
+
+```sh
+ctx setup --host antigravity --acp --acp-model gemini-4-neon --acp-tier frontier
+ctx orchestrate 'Review the current diff' --dry-run
+```
+
+**SDK worker.** `ctx wrap antigravity-sdk` installs the SDK worker and prints the
+launcher path. With `GEMINI_API_KEY` set, pass an API ID to that launcher, e.g.
+`--model gemini-4-hydrogen -p 'Run the parser tests'`. To make a Gemini 4 model
+eligible for automatic SDK routing, set `ANTIGRAVITY_MODEL` to its base ID.
+The router still chooses among eligible models for each task. Installing the
+SDK alone keeps the existing routing defaults.
+
+Route estimates use global standard API rates before promotional credits.
+The table prices cache writes as uncached input. Google lists separate write
+rates for Hydrogen and Neon starting January 12, 2027. Antigravity subscriptions
+and credits use their own plan. [API prices](https://cloud.google.com/model-garden/pricing) · [Antigravity plans](https://antigravity.google/docs/plans)
+
+## Launch a read-only review
+
+Replace the path with one in your checkout. Use the task ID from the first command
+and the session ID from the launch response in the commands that follow.
 
 ```sh
 ctx collab new --goal "Review the proposed change" --owns src/example.py
@@ -43,8 +93,8 @@ Attach a plan of at most eight `{ "goal": "...", "check": "..." }` steps using
 `ctx collab plan TASK_ID --by agy --file PLAN.json`. Then:
 
 ```sh
-ctx collab prewalk TASK_ID --model gemini-4-argon-high
-ctx collab continue GUIDE_SESSION_ID --model gemini-3.8-flash-high
+ctx collab prewalk TASK_ID --model gemini-4-carbon-high
+ctx collab continue GUIDE_SESSION_ID --model gemini-4-hydrogen-high
 ```
 
 The guide runs in an isolated Git worktree containing the current tracked and
@@ -58,17 +108,6 @@ Ownership checks and worktrees are coordination measures, not an OS sandbox.
 Checks are trusted local commands. No permission bypass is enabled. Review and
 integration remain explicit; the controller does not merge the isolated changes.
 
-Native streaming and same-conversation read-only review were checked with Argon.
-Guide-to-Flash editing, cancellation, deadlines, and isolation have offline fake-host
-coverage; a live editing run is still needed before claiming provider-level savings.
-
-## Lessons from jCodeMunch
-
-[jCodeMunch](https://github.com/jgravelle/jcodemunch-mcp) reinforces a useful
-workflow: discover symbols cheaply, retrieve exact implementations, and measure
-against a realistic search-and-read baseline. ctx already provides bounded
-`def`, `refs`, `impact`, and `get --symbol` operations plus a progressive tool
-surface. This release adds no jCodeMunch dependency or external summarization
-call. Its published savings are not evidence for ctx savings. Future comparisons
-must pin source revisions and tokenizers, count follow-up retrievals, and verify
-task outcomes alongside context size.
+The repository records a live Argon read-only review. Tests exercise guide and
+continuation, cancellation, deadlines, and isolation with a simulated CLI.
+There are no provider measurements here for a Carbon-to-Hydrogen edit.

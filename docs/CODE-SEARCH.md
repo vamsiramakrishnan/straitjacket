@@ -1,11 +1,10 @@
-# Code search: the index, the query language, history as evidence, and the pack
+# Code search and symbol navigation
 
-This page covers the retrieval substrate added after the DeepSWE receipts
-showed where a harnessed session spends its first ten turns: grep a term, read
-a file, grep another, read the wrong file, read the right one. Every one of
-those turns re-sends the cached prefix and leaves a tool result in the
-transcript for the rest of the session. The substrate answers *where would I
-look* cheaply, repeatedly, and without going stale.
+Start with the question the agent needs to answer. A task description can rank
+candidate files. A symbol name can locate its definition and uses. An error
+message can find matching lines in the working tree or a captured run. Each
+tool returns a bounded result that the agent can inspect before reading further.
+[Walk through a symbol lookup](USE-CASES.md#find-the-code-behind-a-change)
 
 | Piece | Command | What it answers |
 |---|---|---|
@@ -167,9 +166,9 @@ described, and an edited tree is answered in two parts:
 [ctx refs helper · engine scip (exact) · 1 changed file via ast (textual)]
 ```
 
-Sites in files whose hash still matches come from the index — exact. Sites in
-files that changed or are new come from the textual rung, restricted to those
-files. The answer is complete, and each part says what it is. `ctx def`
+Sites in files whose hash still matches come from the compiler index. A
+textual scan covers changed and new files. The header identifies the mixed
+result. Inspect textual matches before treating them as references. `ctx def`
 reaches the exact tier the same way; `ctx impls` has an exact rung from the
 index's own `is_implementation` edges; `ctx index --status` lists the files
 the index no longer describes. An index without a per-file basis (a project's
@@ -232,11 +231,18 @@ static, AST-derived facts, not LSP type-resolution guarantees. The graph's
 5,000-file cap and the languages of installed parsers still apply. A first pack
 can therefore cost more than the historical index-only timings above; later
 packs reuse graph extraction. No embedding service or model call is involved.
-The local replay `python -m evals.pack_workflow --output /tmp/pack-workflow.json`
-compares a prior pack plus source/caller reads with the bundled pack. It measures
-scripted operations and character-based token estimates, not live agent turns
-or provider savings. Its alias-import observation documents a current static
-graph limitation; use LSP-backed references when exact name resolution matters.
+On the four-file workflow fixture, one pack returned the source, caller, callee
+and snapshot in 1,715 bytes. The previous workflow used three operations and
+returned 1,385 bytes. Bundling saved two tool calls and returned 330 extra
+bytes. The static graph also missed a caller imported under an alias. Use
+LSP-backed references when symbol identity matters. The replay made zero model
+calls. [Workflow fixture and results](../evals/pack-workflow-2026-10-29.json)
+
+Reproduce the comparison from this repository:
+
+```bash
+python -m evals.pack_workflow --output /tmp/pack-workflow.json
+```
 
 ### From discovery to a verified repair
 
@@ -270,56 +276,33 @@ already applied transaction. This SDK operation needs local edit/command
 authority; the bounded MCP retrieval tool does not gain mutation permissions.
 See [the SDK repair contract](TOOL-SDK.md#repair-with-evidence).
 
-### What a Cody-style context engine gets wrong, measured
+### File ranking on 14 DeepSWE tasks
 
-Sourcegraph's Cody assembles context by embedding or keyword-retrieving chunks
-and stuffing the top-k into the prompt. `evals/agentbench/pack_recall.py`
-measures the alternative here against a ground truth that does not care about
-anyone's taste: for each validated DeepSWE task, the source files the reference
-solution actually changes, at the base commit, with no model involved. Three
-rankers: `grep-count` (files by how many task identifiers they contain — the
-keyword baseline), `pack-nohist`, and `pack`.
+The evaluation compared each task's ranked files with the source files changed
+by its reference fix. It scored 51 source files that existed at the base
+commits. The fixes created another 17. Recall is the fraction of existing
+reference files retrieved, averaged across tasks. Mean reciprocal rank (MRR)
+measures how early the first relevant file appears.
+[Evaluation code](../evals/agentbench/pack_recall.py) · [Per-task results](../evals/agentbench/results/pack_recall.json)
 
-| ranker | recall@5 | recall@8 | MRR | first hit in top 8 |
+| Ranker | Recall at 5 | Recall at 8 | MRR | Tasks with a relevant file in the top 8 |
 |---|---:|---:|---:|---:|
-| grep-count | 0.376 | 0.429 | 0.547 | 14/14 |
-| pack (no history) | 0.445 | 0.540 | 0.641 | 12/14 |
-| pack | 0.445 | 0.540 | 0.641 | 12/14 |
+| Files ranked by task identifier count | 0.376 | 0.429 | 0.547 | 14/14 |
+| `ctx pack --no-history` | 0.445 | 0.540 | 0.641 | 12/14 |
+| `ctx pack` | 0.445 | 0.540 | 0.641 | 12/14 |
 
-Over 14 tasks and 51 existing gold files (`evals/agentbench/results/pack_recall.json`);
-17 further gold files are *created* by the fix and no ranker can surface them
-(the ceiling is visible in the receipt, not hidden in the denominator). The
-history signal reordered the pack in 10 of 14 tasks without moving any gold
-file across the top-8 boundary — neutral on this set, kept because a commit is
-evidence the model can open, and it costs one bounded `git log`. The first cut of the pack lost to the
-keyword baseline (recall@8 0.36, MRR 0.44): it trusted trigram candidates as
-presence, so `logo/logo.svg` led one task's pack, and it summed set-presence
-so a changelog that mentioned every term once outranked the module that used
-them. Verifying whole-word counts and demoting prose fixed both; the
-measurement, not a hunch, said which.
+History changed file order on ten tasks and left the top-eight recall
+unchanged. The pack retrieved a larger share of relevant files on average.
+Identifier counts found at least one relevant file on two tasks the pack
+missed. The evaluation measured file selection. It made no model calls.
 
-The issues this design avoids, by construction rather than by tuning:
+### Working-tree edits
 
-| Cody-shaped issue | Here |
-|---|---|
-| The embedding index describes a commit; edits after it are invisible until a rebuild nobody triggers | fingerprint sweep before every pack; outlines from the current bytes |
-| Chunks are cut by line count and land mid-symbol | rows are files with their symbol table; the next read is a symbol or a range |
-| Top-k by similarity floods the prompt with near-duplicates and tests | one row per file, tests and prose demoted, budgeted rendering with declared omission |
-| The model cannot tell why a chunk is there | every row carries its terms, symbols, path hits and commits |
-| Retrieval at turn one is the only retrieval | the pack is a verb the model can run again, and the same index answers `search`, `refs` and `sym:` |
-
-### Staleness trade-offs, stated
-
-| approach | stale window | cost per query | wrong answers possible |
-|---|---|---|---|
-| grep the tree | none | a full scan | no |
-| index rebuilt on demand (SCIP, embeddings) | until someone rebuilds | none | yes, confidently |
-| watcher-driven reindex | until the watcher catches up; nothing if it died | none | yes, silently |
-| **this index** | none at query time | a stat sweep (6 ms / 870 files, ~250 ms / 50k) + reads of the candidates | no: candidates are verified |
-| **SCIP per-file** | none for unchanged files; changed files answered textually and labelled | a hash comparison against the text index's catalog | no: each part says what it is |
-
-The remaining trade-off is the first build on a very large tree, which is
-explicit (`ctx index --text`) and reported (`ctx doctor`).
+The text index checks file size and modification time on each query and
+reindexes changed content. Search verifies candidate matches against current
+bytes. On trees above the automatic build limit, run `ctx index --text` to
+build the index explicitly. Check `ctx index --status` for coverage. For
+compiler-backed references after edits, refresh the SCIP index with `ctx index`.
 
 ## `ctx agent`: ctx as the host
 

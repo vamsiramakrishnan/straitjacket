@@ -1,35 +1,23 @@
 # Model catalog — the routing dimensions beyond price
 
-Load this when you are **choosing between two models that both clear the
-capability bar**. If you only need "which tier does this node want", the table
-in [`harness-collaboration.md`](harness-collaboration.md) is enough and this
-file is not worth its tokens.
+Use this reference when choosing a particular host/model pair. For node
+fields, tiers and dependency rules, see
+[the coordinator reference](harness-collaboration.md).
 
-Source of truth: `ctx/data/model-catalog.json` (overridable per repo with a
-`.ctx-catalog.json`). Tiers and role coverage live in `ctx/hosts.py`; prices in
-`ctx/data/model-prices.json`. `ctx wrap detect` prints the live join.
+`ctx/data/model-catalog.json` holds observations, and `.ctx-catalog.json` can
+add workspace evidence per model. The deterministic router uses the tier and
+roles declared in `ctx/hosts.py` and the prices in `ctx/data/model-prices.json`.
+Run `ctx orchestrate 'Review the diff' --dry-run` to inspect the model menu
+and selected workers. Catalog observations can inform an explicit pin.
 
-## The rule that matters
-
-**Every quantitative claim carries a `source`, and a claim without one is not
-shipped.** `tests/test_model_catalog.py` enforces it. This is not bureaucracy:
-a routing decision made on an invented benchmark is worse than one made on
-price alone, because it *looks* informed while being fiction.
-
-Two consequences you must reason with:
-
-- **Absent data means UNKNOWN, never bad.** A model with no throughput row has
-  not been measured; it is not slow. `speciality_score` returns a neutral 0 for
-  a model with no catalog row, and unknown latency sorts as `moderate`, never
-  optimistically as `fast`.
-- **`declared-heuristic` is an honest source value.** It means a human made a
-  judgement call and you may overrule it with a measurement.
+Quantitative catalog entries require a source. Treat an unmeasured value as
+unknown. A `declared-heuristic` source identifies a human judgment.
 
 ## Dimensions
 
 | dimension | what it is | how to weigh it |
 |---|---|---|
-| `specialities` | declared work this model is good at | primary tie-break once tier is met |
+| `specialities` | declared work this model is good at | evidence for choosing a pin among eligible workers |
 | `anti_specialities` | declared poor fits | strong negative; never a hard block |
 | `latency_class` | `fast` / `moderate` / `deliberate`, time-to-first-token *feel* | matters for interactive and fan-out nodes, not for a single long build |
 | `throughput_output_tok_s` | **measured** output tokens/second | matters when a node emits a lot (big refactor, long file) |
@@ -73,7 +61,7 @@ tier label:
   Opus both scored 98% on a three-phase reshape; the split cost $7.04 against
   $9.59.
 
-## How to use this in a routing decision
+## How to choose an explicit host/model pair
 
 1. Gate on capability tier first (`min_tier`) — capability is a gate, not a score.
 2. Among survivors, rank by `speciality_score` against the node's `need_tags`.

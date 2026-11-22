@@ -650,14 +650,9 @@ def wrap_agy_sdk(workspace_root: Path, ctx_exe: str | None = None) -> int:
     print(f"launcher: {launcher_path()}")
     print(f"venv:     {venv_dir()}")
     print()
-    print("This host is ctx's own Antigravity agent, not Google's `agy` CLI.")
-    print("  why:  `agy` is OAuth-only (nothing can script it) and its hook")
-    print("        contract can substitute neither tool input nor tool output,")
-    print("        so it has no output-side gate — see spec/adr/005.")
-    print("  here: containment lives in the tool implementations, so output is")
-    print("        bounded before the model ever sees it. Needs GEMINI_API_KEY.")
-    print()
-    print("Your `agy` install is untouched; `ctx wrap antigravity` still harnesses it.")
+    print("The SDK worker uses GEMINI_API_KEY and returns bounded command output.")
+    print("Select an API model with the launcher's --model option.")
+    print("For native agy sessions, run ctx setup --host antigravity, then agy models.")
     return 0
 
 

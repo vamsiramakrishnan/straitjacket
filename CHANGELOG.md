@@ -6,6 +6,18 @@ with a minor bump per mechanism wave (see CONTRIBUTING.md).
 
 ## [Unreleased]
 
+- `ctx orchestrate --dry-run` and confirmation previews now plan locally for
+  general tasks. Execution can still ask a coordinator model to refine the
+  route. Automatic coordination selects an unattended host.
+- Antigravity routing recognizes explicit Gemini 4 Hydrogen, Neon, Carbon and
+  Argon selections. See [model selection](docs/NATIVE-AGY-SESSIONS.md) for
+  native CLI slugs, ACP endpoint IDs, SDK model IDs and price estimates.
+  The native launcher preserves the selected Gemini 4 effort. The SDK
+  launcher isolates its interpreter from the caller's `PYTHONPATH`.
+- `ctx compress --cache-prefix` now hashes the prefix bytes it emits after
+  applying the configured redaction policy. The serialized prompt uses the
+  same visible evidence as the standalone result.
+
 ## [0.44.0] - 2026-11-15
 
 - Digests of text-like command output (`ctx run` and the hook's output gate) carry an

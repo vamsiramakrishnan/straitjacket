@@ -1,6 +1,6 @@
 {
   "schema": "ctx.model-catalog/v1",
-  "updated": "2026-07-25",
+  "updated": "2026-11-22",
   "note": "Routing dimensions beyond price. Prices live in model-prices.json; capability tiers and role coverage live in ctx/hosts.py (HostSpec.models). This file carries the *additional* signals a coordinator may weigh — specialities, latency class, measured throughput, benchmark proxies — and is overridable per repo with a .ctx-catalog.json at the workspace root.",
   "provenance_rule": "Every quantitative claim carries a `source`. A number without one is not shipped: a routing decision made on an invented benchmark is worse than one made on price alone, because it looks informed. `declared-heuristic` is a legitimate source value and means exactly what it says - a human judgement call, overridable, not a measurement. Absent data means UNKNOWN, never 'bad': a model with no throughput row must not be deprioritised for lacking one.",
   "latency_classes": {
@@ -8,6 +8,10 @@
     "values": ["fast", "moderate", "deliberate"]
   },
   "models": [
+    {"match": "gemini-4-hydrogen", "specialities": ["implement", "edit", "verify"], "benchmarks": {}},
+    {"match": "gemini-4-neon", "specialities": ["implement", "reason", "review"], "benchmarks": {}},
+    {"match": "gemini-4-carbon", "specialities": ["plan", "reason", "architect"], "benchmarks": {}},
+    {"match": "gemini-4-argon", "specialities": ["plan", "reason", "review"], "benchmarks": {}},
     {
       "match": "gemini-3.5-flash-lite",
       "specialities": ["explore", "search", "triage", "verify", "summarize", "classify", "simple-edit"],
