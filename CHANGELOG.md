@@ -6,6 +6,8 @@ with a minor bump per mechanism wave (see CONTRIBUTING.md).
 
 ## [Unreleased]
 
+## [0.45.0] - 2026-11-22
+
 - `ctx orchestrate --dry-run` and confirmation previews now plan locally for
   general tasks. Execution can still ask a coordinator model to refine the
   route. Automatic coordination selects an unattended host.
@@ -17,6 +19,10 @@ with a minor bump per mechanism wave (see CONTRIBUTING.md).
 - `ctx compress --cache-prefix` now hashes the prefix bytes it emits after
   applying the configured redaction policy. The serialized prompt uses the
   same visible evidence as the standalone result.
+- The docs homepage shows how to pass a captured run between workers, with
+  guides to delegation, code search, prompt caching, skills and model selection.
+- The [decision-model evaluation](evals/decision-models-2026-11-15.md) reports
+  the results and limits of the picker experiments.
 
 ## [0.44.0] - 2026-11-15
 
