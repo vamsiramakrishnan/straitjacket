@@ -1,0 +1,52 @@
+{
+  "repeat": 0,
+  "capture": {
+    "argv": [
+      "ctx",
+      "run",
+      "--shell",
+      "cat corpus.log"
+    ],
+    "exit_code": 0,
+    "stdout": "[ctx run:5490d9cb2cc0 profile=logtemplate/v1]\ncwd: .\ncommand: cat corpus.log\nexit: 0\nstdout: 20,001 lines · 979.1 KiB · est 250,648 tokens\nstderr: 0 lines · 0 B\ntemplates: 11 cover 20,001/20,001 lines · top 10 shown (20,000 lines)\n  2,608× L6: INFO worker-<*> request req-<*> enqueued in <*> · span 0f44195122\n  2,545× L11: INFO worker-<*> request req-<*> validated in <*> · span 432ba740c9\n  2,508× L2: INFO worker-<*> request req-<*> accepted in <*> · span 02398680c8\n  2,493× L5: INFO worker-<*> request req-<*> dispatched in <*> · span 0ee5d290df\n  2,485× L1: INFO worker-<*> request req-<*> processed in <*> · span 293a8c7444\n  2,463× L7: INFO worker-<*> request req-<*> forwarded in <*> · span 6ec949596b\n  2,461× L18: INFO worker-<*> request req-<*> cached in <*> · span 5e48f87a56\n  2,435× L21: INFO worker-<*> request req-<*> completed in <*> · span 0ae8019381\n  1× L5000: ERROR db-pool connection refused on shard <*> (attempt <*>)\n  1× L14238: INFO worker-<*> checkout request req-<*> fell back to legacy gateway after circuit opened\nexceptional:\n  L5000: ERROR db-pool connection refused on shard 7 (attempt 3)\n  L17650: ERROR cache eviction storm: 4128 keys dropped in 200ms window\n  L14238: INFO worker-14 checkout request req-14237 fell back to legacy gateway after circuit opened\ncoverage:\n  parsed: 20,001/20,001 lines\n  shown: 13 spans · omitted: 19,988 lines\nnext:\n  ctx search run:5490d9cb2cc0 'ERROR' --context 3\n  ctx get run:5490d9cb2cc0#stdout --lines 5000:5003\n",
+    "stderr": "",
+    "elapsed_s": 0.46501968900020074
+  },
+  "retrieval": {
+    "argv": [
+      "ctx",
+      "get",
+      "run:5490d9cb2cc0",
+      "--lines",
+      "14228:14248"
+    ],
+    "exit_code": 0,
+    "stdout": "[ctx get run:5490d9cb2cc0#stdout]\nselector: --lines 14228:14248 of 20,001\nL14228: INFO worker-7 request req-14228 forwarded in 34ms\nL14229: INFO worker-10 request req-14229 forwarded in 76ms\nL14230: INFO worker-9 request req-14230 forwarded in 54ms\nL14231: INFO worker-6 request req-14231 processed in 26ms\nL14232: INFO worker-5 request req-14232 completed in 85ms\nL14233: INFO worker-15 request req-14233 completed in 71ms\nL14234: INFO worker-5 request req-14234 cached in 73ms\nL14235: INFO worker-28 request req-14235 forwarded in 34ms\nL14236: INFO worker-15 request req-14236 dispatched in 66ms\nL14237: INFO worker-19 request req-14237 validated in 9ms\nL14238: INFO worker-14 checkout request req-14237 fell back to legacy gateway after circuit opened\nL14239: INFO worker-12 request req-14239 processed in 67ms\nL14240: INFO worker-14 request req-14240 forwarded in 11ms\nL14241: INFO worker-32 request req-14241 processed in 35ms\nL14242: INFO worker-7 request req-14242 dispatched in 32ms\nL14243: INFO worker-30 request req-14243 forwarded in 8ms\nL14244: INFO worker-31 request req-14244 processed in 87ms\nL14245: INFO worker-19 request req-14245 forwarded in 66ms\nL14246: INFO worker-5 request req-14246 cached in 65ms\nL14247: INFO worker-1 request req-14247 processed in 43ms\nL14248: INFO worker-12 request req-14248 forwarded in 29ms\n",
+    "stderr": "",
+    "elapsed_s": 0.10073239500025011
+  },
+  "omitted_line_retrieval": {
+    "argv": [
+      "ctx",
+      "get",
+      "run:5490d9cb2cc0",
+      "--lines",
+      "123:123"
+    ],
+    "exit_code": 0,
+    "stdout": "[ctx get run:5490d9cb2cc0#stdout]\nselector: --lines 123:123 of 20,001\nL123: INFO worker-29 request req-00123 dispatched in 81ms\n",
+    "stderr": "",
+    "elapsed_s": 0.09638057000029221
+  },
+  "actual_visible_tokens": 537,
+  "canonical_visible_tokens": 531,
+  "canonical_digest_sha256": "61b0c1e0a4498f2b2f7c69fcc834131c88dd9da8982c51a300414abc20870474",
+  "quiet_needle_survived": true,
+  "loud_needle_survived": true,
+  "stored_bytes": 1002594,
+  "stored_sha256": "3ea53b7bc88fb21f7c86189e39938e77444fff9cc1c5f8d1814a76275c60ce1d",
+  "raw_round_trip_exact": true,
+  "retrieval_exact": true,
+  "omitted_line_absent_from_digest": true,
+  "omitted_line_retrieval_exact": true
+}

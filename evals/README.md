@@ -15,6 +15,12 @@ and frontier/prewalk strategies with independent acceptance checks. It includes
 a model-free fixture and a live CLI-adapter contract; fixture success does not
 establish a model-quality or cost improvement.
 
+The [matched cache A/B evaluation](CACHE-AB.md) reuses the coding-suite and
+field-log fixtures to separate exploration, containment, and stable-prefix
+effects. Its [offline receipt](cache-ab-2026-11-23.md) records token delivery,
+retrieval fidelity, and referee calibration. Provider billing remains pending
+explicit approval; `cache_ab.py plan` is non-billable and `live` is gated.
+
 ## How to run an eval
 
 Every runnable script lives directly in `evals/` and has a `__main__` block, so

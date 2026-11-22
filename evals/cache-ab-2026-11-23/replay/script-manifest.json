@@ -1,0 +1,652 @@
+{
+  "schema": "straitjacket.cache-ab.replay/v1",
+  "provider_calls": 0,
+  "scripts": {
+    "quiet_flood": {
+      "diagnostic": "python3 diagnose.py",
+      "sources": {
+        "app/router.py": [
+          "route"
+        ]
+      }
+    },
+    "keyword_flood": {
+      "diagnostic": "python3 diagnose.py",
+      "sources": {
+        "app/router.py": [
+          "route"
+        ]
+      }
+    },
+    "traceback": {
+      "diagnostic": "python3 run.py",
+      "sources": {
+        "pipeline.py": [
+          "normalize",
+          "load"
+        ]
+      }
+    },
+    "bigtest": {
+      "diagnostic": "python3 tests/verify.py",
+      "sources": {
+        "mathlib.py": [
+          "clamp",
+          "is_even",
+          "last",
+          "merge",
+          "sign"
+        ]
+      }
+    },
+    "multifile": {
+      "diagnostic": "python3 tests/verify.py",
+      "sources": {
+        "api.py": [
+          "make_slug"
+        ],
+        "textutil.py": [
+          "slugify"
+        ]
+      }
+    }
+  },
+  "arms": [
+    "native",
+    "explore",
+    "contain",
+    "full"
+  ],
+  "cells": [
+    {
+      "task": "quiet_flood",
+      "arm": "native",
+      "fixture": {
+        "task": "quiet_flood",
+        "prompt": "A test fails. First run `python3 diagnose.py` — its output explains how the 'apac' region must now be routed (the reason is a single line in a large log). Then fix app/router.py accordingly.\nFix the project so `python3 tests/verify.py` exits 0 (prints OK / no failures).\nUse the `shell` tool to run commands. Iterate: reproduce, read the evidence, edit the source, re-run tests/verify.py until it passes. Then briefly say what you fixed.",
+        "editable": [
+          "app/router.py"
+        ],
+        "files": {
+          "app/__init__.py": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "app/router.py": "340376429abe8f5df1a1801910a83302f7f6b69d8714c911e67307c049767879",
+          "ctx.toml": "d3c95e7ca99885f829caec3bbbfe0b21075d8adf024085e1908602d5c4adfb18",
+          "diagnose.py": "cffeee1d6f570f3036922061e226027bcdfe418da913fefbd1d97f368cbd8811",
+          "tests/verify.py": "f27ed4727ce4adcf6e374831e776b9f589e94b8d79335a2495af12ce7f96860d"
+        },
+        "referee_sha256": "df25ac112e1fabd156c00627bbe2ec4067ee319e5e1c284fe320ff40df0bc241"
+      },
+      "transcript": "transcripts/quiet_flood-native.jsonl",
+      "transcript_sha256": "55fd06796cc67d318fde1cb85e79ef7da1b51b470e2a1df59017be392d5e9615",
+      "tool_calls": 3,
+      "visible_tokens_actual": 39064,
+      "visible_tokens_normalized": 39064,
+      "tool_wall_s": 0.024178711000331532,
+      "provider_tokens": null,
+      "cache_reads": null,
+      "cache_writes": null,
+      "model_task_success": null,
+      "provider_cost_usd": null
+    },
+    {
+      "task": "quiet_flood",
+      "arm": "explore",
+      "fixture": {
+        "task": "quiet_flood",
+        "prompt": "A test fails. First run `python3 diagnose.py` — its output explains how the 'apac' region must now be routed (the reason is a single line in a large log). Then fix app/router.py accordingly.\nFix the project so `python3 tests/verify.py` exits 0 (prints OK / no failures).\nUse the `shell` tool to run commands. Iterate: reproduce, read the evidence, edit the source, re-run tests/verify.py until it passes. Then briefly say what you fixed.",
+        "editable": [
+          "app/router.py"
+        ],
+        "files": {
+          "app/__init__.py": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "app/router.py": "340376429abe8f5df1a1801910a83302f7f6b69d8714c911e67307c049767879",
+          "ctx.toml": "d3c95e7ca99885f829caec3bbbfe0b21075d8adf024085e1908602d5c4adfb18",
+          "diagnose.py": "cffeee1d6f570f3036922061e226027bcdfe418da913fefbd1d97f368cbd8811",
+          "tests/verify.py": "f27ed4727ce4adcf6e374831e776b9f589e94b8d79335a2495af12ce7f96860d"
+        },
+        "referee_sha256": "df25ac112e1fabd156c00627bbe2ec4067ee319e5e1c284fe320ff40df0bc241"
+      },
+      "transcript": "transcripts/quiet_flood-explore.jsonl",
+      "transcript_sha256": "dedcd47f994908a6c7a3ced4f217f43f46ecf4bc6ca8186909c82a1e6a4d91fe",
+      "tool_calls": 3,
+      "visible_tokens_actual": 39267,
+      "visible_tokens_normalized": 39266,
+      "tool_wall_s": 0.22504688799972428,
+      "provider_tokens": null,
+      "cache_reads": null,
+      "cache_writes": null,
+      "model_task_success": null,
+      "provider_cost_usd": null
+    },
+    {
+      "task": "quiet_flood",
+      "arm": "contain",
+      "fixture": {
+        "task": "quiet_flood",
+        "prompt": "A test fails. First run `python3 diagnose.py` — its output explains how the 'apac' region must now be routed (the reason is a single line in a large log). Then fix app/router.py accordingly.\nFix the project so `python3 tests/verify.py` exits 0 (prints OK / no failures).\nUse the `shell` tool to run commands. Iterate: reproduce, read the evidence, edit the source, re-run tests/verify.py until it passes. Then briefly say what you fixed.",
+        "editable": [
+          "app/router.py"
+        ],
+        "files": {
+          "app/__init__.py": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "app/router.py": "340376429abe8f5df1a1801910a83302f7f6b69d8714c911e67307c049767879",
+          "ctx.toml": "d3c95e7ca99885f829caec3bbbfe0b21075d8adf024085e1908602d5c4adfb18",
+          "diagnose.py": "cffeee1d6f570f3036922061e226027bcdfe418da913fefbd1d97f368cbd8811",
+          "tests/verify.py": "f27ed4727ce4adcf6e374831e776b9f589e94b8d79335a2495af12ce7f96860d"
+        },
+        "referee_sha256": "df25ac112e1fabd156c00627bbe2ec4067ee319e5e1c284fe320ff40df0bc241"
+      },
+      "transcript": "transcripts/quiet_flood-contain.jsonl",
+      "transcript_sha256": "98580b60b5631ac9d871e212f64f059d491b685a53acab99b0b7274559147f4c",
+      "tool_calls": 3,
+      "visible_tokens_actual": 357,
+      "visible_tokens_normalized": 355,
+      "tool_wall_s": 0.679883966000034,
+      "provider_tokens": null,
+      "cache_reads": null,
+      "cache_writes": null,
+      "model_task_success": null,
+      "provider_cost_usd": null
+    },
+    {
+      "task": "quiet_flood",
+      "arm": "full",
+      "fixture": {
+        "task": "quiet_flood",
+        "prompt": "A test fails. First run `python3 diagnose.py` — its output explains how the 'apac' region must now be routed (the reason is a single line in a large log). Then fix app/router.py accordingly.\nFix the project so `python3 tests/verify.py` exits 0 (prints OK / no failures).\nUse the `shell` tool to run commands. Iterate: reproduce, read the evidence, edit the source, re-run tests/verify.py until it passes. Then briefly say what you fixed.",
+        "editable": [
+          "app/router.py"
+        ],
+        "files": {
+          "app/__init__.py": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "app/router.py": "340376429abe8f5df1a1801910a83302f7f6b69d8714c911e67307c049767879",
+          "ctx.toml": "d3c95e7ca99885f829caec3bbbfe0b21075d8adf024085e1908602d5c4adfb18",
+          "diagnose.py": "cffeee1d6f570f3036922061e226027bcdfe418da913fefbd1d97f368cbd8811",
+          "tests/verify.py": "f27ed4727ce4adcf6e374831e776b9f589e94b8d79335a2495af12ce7f96860d"
+        },
+        "referee_sha256": "df25ac112e1fabd156c00627bbe2ec4067ee319e5e1c284fe320ff40df0bc241"
+      },
+      "transcript": "transcripts/quiet_flood-full.jsonl",
+      "transcript_sha256": "0e63c6911962941c854d3ba04852507b5a0906e66bf3da89fc2b97baf076e197",
+      "tool_calls": 3,
+      "visible_tokens_actual": 500,
+      "visible_tokens_normalized": 498,
+      "tool_wall_s": 0.526891653000348,
+      "provider_tokens": null,
+      "cache_reads": null,
+      "cache_writes": null,
+      "model_task_success": null,
+      "provider_cost_usd": null
+    },
+    {
+      "task": "keyword_flood",
+      "arm": "native",
+      "fixture": {
+        "task": "keyword_flood",
+        "prompt": "A test fails. Run `python3 diagnose.py`; one line marked FIXME explains how 'apac' must be routed. Fix app/router.py.\nFix the project so `python3 tests/verify.py` exits 0 (prints OK / no failures).\nUse the `shell` tool to run commands. Iterate: reproduce, read the evidence, edit the source, re-run tests/verify.py until it passes. Then briefly say what you fixed.",
+        "editable": [
+          "app/router.py"
+        ],
+        "files": {
+          "app/__init__.py": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "app/router.py": "340376429abe8f5df1a1801910a83302f7f6b69d8714c911e67307c049767879",
+          "ctx.toml": "d3c95e7ca99885f829caec3bbbfe0b21075d8adf024085e1908602d5c4adfb18",
+          "diagnose.py": "39a5cd993d3e22466c9a4f18a18e9a08071886a53120d920595c978d79b59087",
+          "tests/verify.py": "f27ed4727ce4adcf6e374831e776b9f589e94b8d79335a2495af12ce7f96860d"
+        },
+        "referee_sha256": "df25ac112e1fabd156c00627bbe2ec4067ee319e5e1c284fe320ff40df0bc241"
+      },
+      "transcript": "transcripts/keyword_flood-native.jsonl",
+      "transcript_sha256": "3f35a2a97b53c6f3c52fe2fe155765e587240b32ee96c6866d8ba683eb76cb08",
+      "tool_calls": 3,
+      "visible_tokens_actual": 39057,
+      "visible_tokens_normalized": 39057,
+      "tool_wall_s": 0.02111219499965955,
+      "provider_tokens": null,
+      "cache_reads": null,
+      "cache_writes": null,
+      "model_task_success": null,
+      "provider_cost_usd": null
+    },
+    {
+      "task": "keyword_flood",
+      "arm": "explore",
+      "fixture": {
+        "task": "keyword_flood",
+        "prompt": "A test fails. Run `python3 diagnose.py`; one line marked FIXME explains how 'apac' must be routed. Fix app/router.py.\nFix the project so `python3 tests/verify.py` exits 0 (prints OK / no failures).\nUse the `shell` tool to run commands. Iterate: reproduce, read the evidence, edit the source, re-run tests/verify.py until it passes. Then briefly say what you fixed.",
+        "editable": [
+          "app/router.py"
+        ],
+        "files": {
+          "app/__init__.py": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "app/router.py": "340376429abe8f5df1a1801910a83302f7f6b69d8714c911e67307c049767879",
+          "ctx.toml": "d3c95e7ca99885f829caec3bbbfe0b21075d8adf024085e1908602d5c4adfb18",
+          "diagnose.py": "39a5cd993d3e22466c9a4f18a18e9a08071886a53120d920595c978d79b59087",
+          "tests/verify.py": "f27ed4727ce4adcf6e374831e776b9f589e94b8d79335a2495af12ce7f96860d"
+        },
+        "referee_sha256": "df25ac112e1fabd156c00627bbe2ec4067ee319e5e1c284fe320ff40df0bc241"
+      },
+      "transcript": "transcripts/keyword_flood-explore.jsonl",
+      "transcript_sha256": "369a5a406e438c84037e0346741264403e3c59bbe94ee3220d61ca985b749713",
+      "tool_calls": 3,
+      "visible_tokens_actual": 39261,
+      "visible_tokens_normalized": 39259,
+      "tool_wall_s": 0.2523405589995491,
+      "provider_tokens": null,
+      "cache_reads": null,
+      "cache_writes": null,
+      "model_task_success": null,
+      "provider_cost_usd": null
+    },
+    {
+      "task": "keyword_flood",
+      "arm": "contain",
+      "fixture": {
+        "task": "keyword_flood",
+        "prompt": "A test fails. Run `python3 diagnose.py`; one line marked FIXME explains how 'apac' must be routed. Fix app/router.py.\nFix the project so `python3 tests/verify.py` exits 0 (prints OK / no failures).\nUse the `shell` tool to run commands. Iterate: reproduce, read the evidence, edit the source, re-run tests/verify.py until it passes. Then briefly say what you fixed.",
+        "editable": [
+          "app/router.py"
+        ],
+        "files": {
+          "app/__init__.py": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "app/router.py": "340376429abe8f5df1a1801910a83302f7f6b69d8714c911e67307c049767879",
+          "ctx.toml": "d3c95e7ca99885f829caec3bbbfe0b21075d8adf024085e1908602d5c4adfb18",
+          "diagnose.py": "39a5cd993d3e22466c9a4f18a18e9a08071886a53120d920595c978d79b59087",
+          "tests/verify.py": "f27ed4727ce4adcf6e374831e776b9f589e94b8d79335a2495af12ce7f96860d"
+        },
+        "referee_sha256": "df25ac112e1fabd156c00627bbe2ec4067ee319e5e1c284fe320ff40df0bc241"
+      },
+      "transcript": "transcripts/keyword_flood-contain.jsonl",
+      "transcript_sha256": "0d51445467d1a0b75e421cafe4f13353771d87c68f4fbb2a140ac3c2c14ff68a",
+      "tool_calls": 3,
+      "visible_tokens_actual": 350,
+      "visible_tokens_normalized": 345,
+      "tool_wall_s": 0.619396876000792,
+      "provider_tokens": null,
+      "cache_reads": null,
+      "cache_writes": null,
+      "model_task_success": null,
+      "provider_cost_usd": null
+    },
+    {
+      "task": "keyword_flood",
+      "arm": "full",
+      "fixture": {
+        "task": "keyword_flood",
+        "prompt": "A test fails. Run `python3 diagnose.py`; one line marked FIXME explains how 'apac' must be routed. Fix app/router.py.\nFix the project so `python3 tests/verify.py` exits 0 (prints OK / no failures).\nUse the `shell` tool to run commands. Iterate: reproduce, read the evidence, edit the source, re-run tests/verify.py until it passes. Then briefly say what you fixed.",
+        "editable": [
+          "app/router.py"
+        ],
+        "files": {
+          "app/__init__.py": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "app/router.py": "340376429abe8f5df1a1801910a83302f7f6b69d8714c911e67307c049767879",
+          "ctx.toml": "d3c95e7ca99885f829caec3bbbfe0b21075d8adf024085e1908602d5c4adfb18",
+          "diagnose.py": "39a5cd993d3e22466c9a4f18a18e9a08071886a53120d920595c978d79b59087",
+          "tests/verify.py": "f27ed4727ce4adcf6e374831e776b9f589e94b8d79335a2495af12ce7f96860d"
+        },
+        "referee_sha256": "df25ac112e1fabd156c00627bbe2ec4067ee319e5e1c284fe320ff40df0bc241"
+      },
+      "transcript": "transcripts/keyword_flood-full.jsonl",
+      "transcript_sha256": "9b5a177b06c40bfda72775de8719fa2b489c3bb79c6fec23245ff2b9ee393e8b",
+      "tool_calls": 3,
+      "visible_tokens_actual": 489,
+      "visible_tokens_normalized": 488,
+      "tool_wall_s": 0.5802215019998584,
+      "provider_tokens": null,
+      "cache_reads": null,
+      "cache_writes": null,
+      "model_task_success": null,
+      "provider_cost_usd": null
+    },
+    {
+      "task": "traceback",
+      "arm": "native",
+      "fixture": {
+        "task": "traceback",
+        "prompt": "`python3 run.py` crashes. Find the root cause in the traceback and fix pipeline.py so a missing 'ratio' key defaults sensibly.\nFix the project so `python3 tests/verify.py` exits 0 (prints OK / no failures).\nUse the `shell` tool to run commands. Iterate: reproduce, read the evidence, edit the source, re-run tests/verify.py until it passes. Then briefly say what you fixed.",
+        "editable": [
+          "pipeline.py"
+        ],
+        "files": {
+          "ctx.toml": "d3c95e7ca99885f829caec3bbbfe0b21075d8adf024085e1908602d5c4adfb18",
+          "pipeline.py": "122a69c2e9399c3d49f44be4dc482583b7ea2f27a61e714c55eac656d3fa8ac9",
+          "run.py": "5c01097831eec2e8ef2ef3bfd97fc3e8b465d76e95576c9806d6aae1cfb65785",
+          "tests/verify.py": "31409879f6c72ae2f92a75254e7e69dcb8256a4845aaf5455b6bf05351493a36"
+        },
+        "referee_sha256": "552e7429e32d54160927233ed90f5e6b5763152f5bfcdaca1c64324239c48702"
+      },
+      "transcript": "transcripts/traceback-native.jsonl",
+      "transcript_sha256": "fb1397da242bd1a5bdcab8b5706ca2d495eaae157c77d5812a53b1718290b15f",
+      "tool_calls": 3,
+      "visible_tokens_actual": 2200,
+      "visible_tokens_normalized": 2168,
+      "tool_wall_s": 0.028514629999790486,
+      "provider_tokens": null,
+      "cache_reads": null,
+      "cache_writes": null,
+      "model_task_success": null,
+      "provider_cost_usd": null
+    },
+    {
+      "task": "traceback",
+      "arm": "explore",
+      "fixture": {
+        "task": "traceback",
+        "prompt": "`python3 run.py` crashes. Find the root cause in the traceback and fix pipeline.py so a missing 'ratio' key defaults sensibly.\nFix the project so `python3 tests/verify.py` exits 0 (prints OK / no failures).\nUse the `shell` tool to run commands. Iterate: reproduce, read the evidence, edit the source, re-run tests/verify.py until it passes. Then briefly say what you fixed.",
+        "editable": [
+          "pipeline.py"
+        ],
+        "files": {
+          "ctx.toml": "d3c95e7ca99885f829caec3bbbfe0b21075d8adf024085e1908602d5c4adfb18",
+          "pipeline.py": "122a69c2e9399c3d49f44be4dc482583b7ea2f27a61e714c55eac656d3fa8ac9",
+          "run.py": "5c01097831eec2e8ef2ef3bfd97fc3e8b465d76e95576c9806d6aae1cfb65785",
+          "tests/verify.py": "31409879f6c72ae2f92a75254e7e69dcb8256a4845aaf5455b6bf05351493a36"
+        },
+        "referee_sha256": "552e7429e32d54160927233ed90f5e6b5763152f5bfcdaca1c64324239c48702"
+      },
+      "transcript": "transcripts/traceback-explore.jsonl",
+      "transcript_sha256": "f1ed0c60350dda7062520fa91c043c537390009fce7becb60147fc04b66f5e3b",
+      "tool_calls": 4,
+      "visible_tokens_actual": 2515,
+      "visible_tokens_normalized": 2475,
+      "tool_wall_s": 0.36181972499980475,
+      "provider_tokens": null,
+      "cache_reads": null,
+      "cache_writes": null,
+      "model_task_success": null,
+      "provider_cost_usd": null
+    },
+    {
+      "task": "traceback",
+      "arm": "contain",
+      "fixture": {
+        "task": "traceback",
+        "prompt": "`python3 run.py` crashes. Find the root cause in the traceback and fix pipeline.py so a missing 'ratio' key defaults sensibly.\nFix the project so `python3 tests/verify.py` exits 0 (prints OK / no failures).\nUse the `shell` tool to run commands. Iterate: reproduce, read the evidence, edit the source, re-run tests/verify.py until it passes. Then briefly say what you fixed.",
+        "editable": [
+          "pipeline.py"
+        ],
+        "files": {
+          "ctx.toml": "d3c95e7ca99885f829caec3bbbfe0b21075d8adf024085e1908602d5c4adfb18",
+          "pipeline.py": "122a69c2e9399c3d49f44be4dc482583b7ea2f27a61e714c55eac656d3fa8ac9",
+          "run.py": "5c01097831eec2e8ef2ef3bfd97fc3e8b465d76e95576c9806d6aae1cfb65785",
+          "tests/verify.py": "31409879f6c72ae2f92a75254e7e69dcb8256a4845aaf5455b6bf05351493a36"
+        },
+        "referee_sha256": "552e7429e32d54160927233ed90f5e6b5763152f5bfcdaca1c64324239c48702"
+      },
+      "transcript": "transcripts/traceback-contain.jsonl",
+      "transcript_sha256": "6095921b41db17126a841e5a49a88a8a53d2edac3a5b9b3204b09dd99ad6abc1",
+      "tool_calls": 3,
+      "visible_tokens_actual": 417,
+      "visible_tokens_normalized": 401,
+      "tool_wall_s": 0.6642846949998784,
+      "provider_tokens": null,
+      "cache_reads": null,
+      "cache_writes": null,
+      "model_task_success": null,
+      "provider_cost_usd": null
+    },
+    {
+      "task": "traceback",
+      "arm": "full",
+      "fixture": {
+        "task": "traceback",
+        "prompt": "`python3 run.py` crashes. Find the root cause in the traceback and fix pipeline.py so a missing 'ratio' key defaults sensibly.\nFix the project so `python3 tests/verify.py` exits 0 (prints OK / no failures).\nUse the `shell` tool to run commands. Iterate: reproduce, read the evidence, edit the source, re-run tests/verify.py until it passes. Then briefly say what you fixed.",
+        "editable": [
+          "pipeline.py"
+        ],
+        "files": {
+          "ctx.toml": "d3c95e7ca99885f829caec3bbbfe0b21075d8adf024085e1908602d5c4adfb18",
+          "pipeline.py": "122a69c2e9399c3d49f44be4dc482583b7ea2f27a61e714c55eac656d3fa8ac9",
+          "run.py": "5c01097831eec2e8ef2ef3bfd97fc3e8b465d76e95576c9806d6aae1cfb65785",
+          "tests/verify.py": "31409879f6c72ae2f92a75254e7e69dcb8256a4845aaf5455b6bf05351493a36"
+        },
+        "referee_sha256": "552e7429e32d54160927233ed90f5e6b5763152f5bfcdaca1c64324239c48702"
+      },
+      "transcript": "transcripts/traceback-full.jsonl",
+      "transcript_sha256": "1a5a652c7f00836c22338fe51e5d775b3968f0126205bde57479840afacda57f",
+      "tool_calls": 4,
+      "visible_tokens_actual": 678,
+      "visible_tokens_normalized": 664,
+      "tool_wall_s": 0.6630344919994968,
+      "provider_tokens": null,
+      "cache_reads": null,
+      "cache_writes": null,
+      "model_task_success": null,
+      "provider_cost_usd": null
+    },
+    {
+      "task": "bigtest",
+      "arm": "native",
+      "fixture": {
+        "task": "bigtest",
+        "prompt": "The test suite `python3 tests/verify.py` reports several failures across mathlib.py. Fix every failing function.\nFix the project so `python3 tests/verify.py` exits 0 (prints OK / no failures).\nUse the `shell` tool to run commands. Iterate: reproduce, read the evidence, edit the source, re-run tests/verify.py until it passes. Then briefly say what you fixed.",
+        "editable": [
+          "mathlib.py"
+        ],
+        "files": {
+          "ctx.toml": "d3c95e7ca99885f829caec3bbbfe0b21075d8adf024085e1908602d5c4adfb18",
+          "mathlib.py": "dc5d5f3beeb6fcab40cb9eafe9cba9e8a65e76c797b3ca439f229b9647d3a1a6",
+          "tests/verify.py": "3f94b9c39b73be10411cc2f73bcd552d1056d3febbf8262fe45d5781261709b1"
+        },
+        "referee_sha256": "ddb223823185a93fe25e668f4abac379ad6e4f4932977dfbed874288f9364c0d"
+      },
+      "transcript": "transcripts/bigtest-native.jsonl",
+      "transcript_sha256": "ea306a9e22f689a855c0f804277ce5baa66f4798fe22c641a511ecb896984ae4",
+      "tool_calls": 3,
+      "visible_tokens_actual": 332,
+      "visible_tokens_normalized": 302,
+      "tool_wall_s": 0.0372816769995552,
+      "provider_tokens": null,
+      "cache_reads": null,
+      "cache_writes": null,
+      "model_task_success": null,
+      "provider_cost_usd": null
+    },
+    {
+      "task": "bigtest",
+      "arm": "explore",
+      "fixture": {
+        "task": "bigtest",
+        "prompt": "The test suite `python3 tests/verify.py` reports several failures across mathlib.py. Fix every failing function.\nFix the project so `python3 tests/verify.py` exits 0 (prints OK / no failures).\nUse the `shell` tool to run commands. Iterate: reproduce, read the evidence, edit the source, re-run tests/verify.py until it passes. Then briefly say what you fixed.",
+        "editable": [
+          "mathlib.py"
+        ],
+        "files": {
+          "ctx.toml": "d3c95e7ca99885f829caec3bbbfe0b21075d8adf024085e1908602d5c4adfb18",
+          "mathlib.py": "dc5d5f3beeb6fcab40cb9eafe9cba9e8a65e76c797b3ca439f229b9647d3a1a6",
+          "tests/verify.py": "3f94b9c39b73be10411cc2f73bcd552d1056d3febbf8262fe45d5781261709b1"
+        },
+        "referee_sha256": "ddb223823185a93fe25e668f4abac379ad6e4f4932977dfbed874288f9364c0d"
+      },
+      "transcript": "transcripts/bigtest-explore.jsonl",
+      "transcript_sha256": "15c72119918412bc76927cb2017b9df99a359d889ffd059b86f3a689377b653a",
+      "tool_calls": 7,
+      "visible_tokens_actual": 1044,
+      "visible_tokens_normalized": 1004,
+      "tool_wall_s": 0.7244550760001403,
+      "provider_tokens": null,
+      "cache_reads": null,
+      "cache_writes": null,
+      "model_task_success": null,
+      "provider_cost_usd": null
+    },
+    {
+      "task": "bigtest",
+      "arm": "contain",
+      "fixture": {
+        "task": "bigtest",
+        "prompt": "The test suite `python3 tests/verify.py` reports several failures across mathlib.py. Fix every failing function.\nFix the project so `python3 tests/verify.py` exits 0 (prints OK / no failures).\nUse the `shell` tool to run commands. Iterate: reproduce, read the evidence, edit the source, re-run tests/verify.py until it passes. Then briefly say what you fixed.",
+        "editable": [
+          "mathlib.py"
+        ],
+        "files": {
+          "ctx.toml": "d3c95e7ca99885f829caec3bbbfe0b21075d8adf024085e1908602d5c4adfb18",
+          "mathlib.py": "dc5d5f3beeb6fcab40cb9eafe9cba9e8a65e76c797b3ca439f229b9647d3a1a6",
+          "tests/verify.py": "3f94b9c39b73be10411cc2f73bcd552d1056d3febbf8262fe45d5781261709b1"
+        },
+        "referee_sha256": "ddb223823185a93fe25e668f4abac379ad6e4f4932977dfbed874288f9364c0d"
+      },
+      "transcript": "transcripts/bigtest-contain.jsonl",
+      "transcript_sha256": "4e0745c1ba15b408dd803b4d4eeba2ebd3e8dafd307fd528e1f5a08c01f7c8c5",
+      "tool_calls": 3,
+      "visible_tokens_actual": 434,
+      "visible_tokens_normalized": 400,
+      "tool_wall_s": 0.6967995509999128,
+      "provider_tokens": null,
+      "cache_reads": null,
+      "cache_writes": null,
+      "model_task_success": null,
+      "provider_cost_usd": null
+    },
+    {
+      "task": "bigtest",
+      "arm": "full",
+      "fixture": {
+        "task": "bigtest",
+        "prompt": "The test suite `python3 tests/verify.py` reports several failures across mathlib.py. Fix every failing function.\nFix the project so `python3 tests/verify.py` exits 0 (prints OK / no failures).\nUse the `shell` tool to run commands. Iterate: reproduce, read the evidence, edit the source, re-run tests/verify.py until it passes. Then briefly say what you fixed.",
+        "editable": [
+          "mathlib.py"
+        ],
+        "files": {
+          "ctx.toml": "d3c95e7ca99885f829caec3bbbfe0b21075d8adf024085e1908602d5c4adfb18",
+          "mathlib.py": "dc5d5f3beeb6fcab40cb9eafe9cba9e8a65e76c797b3ca439f229b9647d3a1a6",
+          "tests/verify.py": "3f94b9c39b73be10411cc2f73bcd552d1056d3febbf8262fe45d5781261709b1"
+        },
+        "referee_sha256": "ddb223823185a93fe25e668f4abac379ad6e4f4932977dfbed874288f9364c0d"
+      },
+      "transcript": "transcripts/bigtest-full.jsonl",
+      "transcript_sha256": "c044d008da60cf1340358364b4d4f7559b695b18d55a7a5a37f9730b228dbedd",
+      "tool_calls": 7,
+      "visible_tokens_actual": 1090,
+      "visible_tokens_normalized": 1060,
+      "tool_wall_s": 1.0382233980003548,
+      "provider_tokens": null,
+      "cache_reads": null,
+      "cache_writes": null,
+      "model_task_success": null,
+      "provider_cost_usd": null
+    },
+    {
+      "task": "multifile",
+      "arm": "native",
+      "fixture": {
+        "task": "multifile",
+        "prompt": "`python3 tests/verify.py` fails. The bug is in the helper that api.py calls, which lives in another file. Find it and fix it.\nFix the project so `python3 tests/verify.py` exits 0 (prints OK / no failures).\nUse the `shell` tool to run commands. Iterate: reproduce, read the evidence, edit the source, re-run tests/verify.py until it passes. Then briefly say what you fixed.",
+        "editable": [
+          "api.py",
+          "textutil.py"
+        ],
+        "files": {
+          "api.py": "6339260355214f8de9afda68a998c5078b19170f3fcecca58aca54afd734dd6f",
+          "ctx.toml": "d3c95e7ca99885f829caec3bbbfe0b21075d8adf024085e1908602d5c4adfb18",
+          "tests/verify.py": "f126696ea957b62276042a91399ba099e9791b690bca4f28de1cd49fc3df544f",
+          "textutil.py": "00ae25220a7fb31238198422767584455e29cf50c25804c8c902e6e2025ded1f"
+        },
+        "referee_sha256": "970f29c0b66917ae6588ec832466f46ae361be82be54e966b0e9b402cedec5c1"
+      },
+      "transcript": "transcripts/multifile-native.jsonl",
+      "transcript_sha256": "b046c0e9507a33ab82ac9ab0ce5bb3746f3aa4c994c0770bc1c05e9f9076427a",
+      "tool_calls": 4,
+      "visible_tokens_actual": 145,
+      "visible_tokens_normalized": 135,
+      "tool_wall_s": 0.03633057300021392,
+      "provider_tokens": null,
+      "cache_reads": null,
+      "cache_writes": null,
+      "model_task_success": null,
+      "provider_cost_usd": null
+    },
+    {
+      "task": "multifile",
+      "arm": "explore",
+      "fixture": {
+        "task": "multifile",
+        "prompt": "`python3 tests/verify.py` fails. The bug is in the helper that api.py calls, which lives in another file. Find it and fix it.\nFix the project so `python3 tests/verify.py` exits 0 (prints OK / no failures).\nUse the `shell` tool to run commands. Iterate: reproduce, read the evidence, edit the source, re-run tests/verify.py until it passes. Then briefly say what you fixed.",
+        "editable": [
+          "api.py",
+          "textutil.py"
+        ],
+        "files": {
+          "api.py": "6339260355214f8de9afda68a998c5078b19170f3fcecca58aca54afd734dd6f",
+          "ctx.toml": "d3c95e7ca99885f829caec3bbbfe0b21075d8adf024085e1908602d5c4adfb18",
+          "tests/verify.py": "f126696ea957b62276042a91399ba099e9791b690bca4f28de1cd49fc3df544f",
+          "textutil.py": "00ae25220a7fb31238198422767584455e29cf50c25804c8c902e6e2025ded1f"
+        },
+        "referee_sha256": "970f29c0b66917ae6588ec832466f46ae361be82be54e966b0e9b402cedec5c1"
+      },
+      "transcript": "transcripts/multifile-explore.jsonl",
+      "transcript_sha256": "7c39e89151b70fa742d3ed2827a9365c9dda9d451464927a8f540e9341cb923b",
+      "tool_calls": 4,
+      "visible_tokens_actual": 437,
+      "visible_tokens_normalized": 427,
+      "tool_wall_s": 0.415956972999993,
+      "provider_tokens": null,
+      "cache_reads": null,
+      "cache_writes": null,
+      "model_task_success": null,
+      "provider_cost_usd": null
+    },
+    {
+      "task": "multifile",
+      "arm": "contain",
+      "fixture": {
+        "task": "multifile",
+        "prompt": "`python3 tests/verify.py` fails. The bug is in the helper that api.py calls, which lives in another file. Find it and fix it.\nFix the project so `python3 tests/verify.py` exits 0 (prints OK / no failures).\nUse the `shell` tool to run commands. Iterate: reproduce, read the evidence, edit the source, re-run tests/verify.py until it passes. Then briefly say what you fixed.",
+        "editable": [
+          "api.py",
+          "textutil.py"
+        ],
+        "files": {
+          "api.py": "6339260355214f8de9afda68a998c5078b19170f3fcecca58aca54afd734dd6f",
+          "ctx.toml": "d3c95e7ca99885f829caec3bbbfe0b21075d8adf024085e1908602d5c4adfb18",
+          "tests/verify.py": "f126696ea957b62276042a91399ba099e9791b690bca4f28de1cd49fc3df544f",
+          "textutil.py": "00ae25220a7fb31238198422767584455e29cf50c25804c8c902e6e2025ded1f"
+        },
+        "referee_sha256": "970f29c0b66917ae6588ec832466f46ae361be82be54e966b0e9b402cedec5c1"
+      },
+      "transcript": "transcripts/multifile-contain.jsonl",
+      "transcript_sha256": "d3bcba5aa49469a8e95e7513fd0b705bb1af42d1d6ad4b594560bacee362c817",
+      "tool_calls": 4,
+      "visible_tokens_actual": 275,
+      "visible_tokens_normalized": 260,
+      "tool_wall_s": 0.8348191719996976,
+      "provider_tokens": null,
+      "cache_reads": null,
+      "cache_writes": null,
+      "model_task_success": null,
+      "provider_cost_usd": null
+    },
+    {
+      "task": "multifile",
+      "arm": "full",
+      "fixture": {
+        "task": "multifile",
+        "prompt": "`python3 tests/verify.py` fails. The bug is in the helper that api.py calls, which lives in another file. Find it and fix it.\nFix the project so `python3 tests/verify.py` exits 0 (prints OK / no failures).\nUse the `shell` tool to run commands. Iterate: reproduce, read the evidence, edit the source, re-run tests/verify.py until it passes. Then briefly say what you fixed.",
+        "editable": [
+          "api.py",
+          "textutil.py"
+        ],
+        "files": {
+          "api.py": "6339260355214f8de9afda68a998c5078b19170f3fcecca58aca54afd734dd6f",
+          "ctx.toml": "d3c95e7ca99885f829caec3bbbfe0b21075d8adf024085e1908602d5c4adfb18",
+          "tests/verify.py": "f126696ea957b62276042a91399ba099e9791b690bca4f28de1cd49fc3df544f",
+          "textutil.py": "00ae25220a7fb31238198422767584455e29cf50c25804c8c902e6e2025ded1f"
+        },
+        "referee_sha256": "970f29c0b66917ae6588ec832466f46ae361be82be54e966b0e9b402cedec5c1"
+      },
+      "transcript": "transcripts/multifile-full.jsonl",
+      "transcript_sha256": "a334a5f1c87a916eb9233c22b667da643e21c218dfdc0bfed6756149e767f96d",
+      "tool_calls": 4,
+      "visible_tokens_actual": 485,
+      "visible_tokens_normalized": 475,
+      "tool_wall_s": 0.6452859060004812,
+      "provider_tokens": null,
+      "cache_reads": null,
+      "cache_writes": null,
+      "model_task_success": null,
+      "provider_cost_usd": null
+    }
+  ],
+  "normalization": "replace candidate absolute path and opaque run/snapshot IDs only; sum each tool output separately",
+  "scope": "Fixed traces over unchanged buggy source. No repairs or adaptive model exploration. Tool output tokens are not provider input tokens or conversation residency. Containment may legitimately add recent-run evidence to ctx map."
+}
