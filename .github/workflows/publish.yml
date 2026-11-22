@@ -3,6 +3,7 @@ name: Publish to PyPI
 on:
   release:
     types: [published]
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -10,6 +11,7 @@ permissions:
 jobs:
   publish:
     name: Build, verify, and publish
+    if: github.ref_type == 'tag'
     runs-on: ubuntu-latest
     environment:
       name: pypi
@@ -17,19 +19,30 @@ jobs:
     permissions:
       contents: read
       id-token: write
+    env:
+      RELEASE_TAG: ${{ github.ref_name }}
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ github.event.release.tag_name }}
+          ref: ${{ github.sha }}
 
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
 
       - name: Check release tag against package version
-        env:
-          RELEASE_TAG: ${{ github.event.release.tag_name }}
         run: python scripts/check_release_tag.py "$RELEASE_TAG"
+
+      - name: Require a published GitHub release for a manual retry
+        if: github.event_name == 'workflow_dispatch'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          draft=$(gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --json isDraft --jq '.isDraft')
+          if [[ "$draft" != false ]]; then
+            echo "::error::Publish the GitHub release for $RELEASE_TAG before retrying."
+            exit 1
+          fi
 
       - name: Build and verify release artifacts
         run: |

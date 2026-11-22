@@ -15,7 +15,7 @@ the model, authenticates the user, and controls its tools.
   <a href="https://github.com/deepseek-ai/deepseek-harness"><img src="assets/agents/dsh.svg" width="36" height="36" alt="DeepSeek Harness" title="DeepSeek Harness"></a>
 </p>
 
-Python 3.11+ · `ctx-harness` v0.45.0 · Apache-2.0 · [Documentation](https://vamsiramakrishnan.github.io/straitjacket/)
+Python 3.11+ · `ctx-harness` v0.5.0 · Apache-2.0 · [Documentation](https://vamsiramakrishnan.github.io/straitjacket/)
 
 | If you want to… | Start here |
 |---|---|
@@ -30,7 +30,7 @@ Python 3.11+ · `ctx-harness` v0.45.0 · Apache-2.0 · [Documentation](https://v
 In a repository with a pytest suite, run:
 
 ```sh
-python -m pip install --upgrade ctx-harness
+python -m pip install 'ctx-harness==0.5.0'
 ctx run -- pytest -q
 ```
 

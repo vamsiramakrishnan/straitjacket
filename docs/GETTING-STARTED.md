@@ -37,17 +37,19 @@ unacceptable.
 
 ## Install
 
+Pin this release explicitly. Python package indexes rank 0.44.0 above 0.5.0.
+
 ```bash
-python -m pip install --upgrade ctx-harness
+python -m pip install 'ctx-harness==0.5.0'
 ctx --version
 ```
 
 Isolated installations also work:
 
 ```bash
-pipx install ctx-harness
+pipx install 'ctx-harness==0.5.0'
 # or
-uv tool install ctx-harness
+uv tool install 'ctx-harness==0.5.0'
 ```
 
 For development:

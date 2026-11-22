@@ -67,9 +67,15 @@ name against the package version before building either artifact. It then
 smoke-tests the wheel, checks both distributions, and requests a PyPI publishing
 credential.
 
-If a published tag fails this check, a rerun uses the same tagged source and
-will fail again. Prepare a new version and publish a matching tag on the
-verified commit. Keep the original tag available to anyone who fetched it.
+If a tag names the wrong version, first verify whether PyPI accepted any
+files. A fresh tag on a verified commit is the usual recovery. Moving an
+existing public tag changes which source readers fetch, so confirm that
+decision with the release owner first.
+
+For a corrected tag whose GitHub release already exists, start a fresh run
+with `gh workflow run publish.yml --ref "$RELEASE_TAG"`. This path requires
+a tag and a published GitHub release. The workflow builds the commit SHA
+recorded by the new event so the checkout and publishing provenance agree.
 
 PyPI releases are immutable. Never upload from a dirty checkout or reuse a
 version after an artifact has been accepted.

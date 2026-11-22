@@ -6,7 +6,10 @@ with a minor bump per mechanism wave (see CONTRIBUTING.md).
 
 ## [Unreleased]
 
-## [0.45.0] - 2026-11-22
+## [0.5.0] - 2026-11-22 (PyPI release)
+
+Install this release with `python -m pip install 'ctx-harness==0.5.0'`.
+Python version ordering places the previously published 0.44.0 above 0.5.0.
 
 - `ctx orchestrate --dry-run` and confirmation previews now plan locally for
   general tasks. Execution can still ask a coordinator model to refine the
