@@ -255,3 +255,7 @@ pytest
 
 New mechanisms need deterministic output, explicit degradation, and a named
 evaluation gate. Follow [CONTRIBUTING.md](CONTRIBUTING.md).
+
+## Related projects
+
+- [branchyard](https://github.com/vamsiramakrishnan/branchyard). Run coding agents on isolated branches and review their changes.
