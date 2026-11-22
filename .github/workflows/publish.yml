@@ -3,6 +3,7 @@ name: Publish to PyPI
 on:
   release:
     types: [published]
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -10,6 +11,7 @@ permissions:
 jobs:
   publish:
     name: Build, verify, and publish
+    if: github.ref_type == 'tag'
     runs-on: ubuntu-latest
     environment:
       name: pypi
@@ -17,25 +19,37 @@ jobs:
     permissions:
       contents: read
       id-token: write
+    env:
+      RELEASE_TAG: ${{ github.ref_name }}
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ github.event.release.tag_name }}
+          ref: ${{ github.sha }}
 
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
 
-      - name: Build and verify release artifacts
+      - name: Check release tag against package version
+        run: python scripts/check_release_tag.py "$RELEASE_TAG"
+
+      - name: Require a published GitHub release for a manual retry
+        if: github.event_name == 'workflow_dispatch'
         env:
-          RELEASE_TAG: ${{ github.event.release.tag_name }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          draft=$(gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --json isDraft --jq '.isDraft')
+          if [[ "$draft" != false ]]; then
+            echo "::error::Publish the GitHub release for $RELEASE_TAG before retrying."
+            exit 1
+          fi
+
+      - name: Build and verify release artifacts
         run: |
           python -m pip install build twine
           python -m build
           python scripts/check_distribution.py dist/*.whl dist/*.tar.gz
           python -m twine check dist/*
-          PACKAGE_VERSION="$(python -c 'import runpy; print(runpy.run_path("src/ctx/__init__.py")["__version__"])')"
-          test "$RELEASE_TAG" = "v$PACKAGE_VERSION"
 
       # Pinned release/v1 (2026-08-17). Authentication is PyPI Trusted
       # Publishing via GitHub OIDC; this workflow accepts no long-lived token.

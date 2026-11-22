@@ -6,6 +6,11 @@ with a minor bump per mechanism wave (see CONTRIBUTING.md).
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-11-22 (PyPI release)
+
+Install this release with `python -m pip install 'ctx-harness==0.5.0'`.
+Python version ordering places the previously published 0.44.0 above 0.5.0.
+
 - `ctx orchestrate --dry-run` and confirmation previews now plan locally for
   general tasks. Execution can still ask a coordinator model to refine the
   route. Automatic coordination selects an unattended host.
@@ -17,6 +22,10 @@ with a minor bump per mechanism wave (see CONTRIBUTING.md).
 - `ctx compress --cache-prefix` now hashes the prefix bytes it emits after
   applying the configured redaction policy. The serialized prompt uses the
   same visible evidence as the standalone result.
+- The docs homepage shows how to pass a captured run between workers, with
+  guides to delegation, code search, prompt caching, skills and model selection.
+- The [decision-model evaluation](evals/decision-models-2026-11-15.md) reports
+  the results and limits of the picker experiments.
 
 ## [0.44.0] - 2026-11-15
 

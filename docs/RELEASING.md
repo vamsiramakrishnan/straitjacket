@@ -27,9 +27,11 @@ failed GitHub Actions job.
 
 ## Release gate
 
-From a clean checkout of the intended release commit:
+From a clean checkout of the intended release commit, set `RELEASE_TAG` to
+the exact tag you plan to publish and run the gate:
 
 ```bash
+python scripts/check_release_tag.py "${RELEASE_TAG:?set RELEASE_TAG to the proposed tag}"
 python -m pip install -e '.[dev]' build twine tiktoken==0.11.0
 python -m pytest tests/ -q
 python scripts/fix_docs_svgs.py --check
@@ -60,9 +62,20 @@ Move the intended `Unreleased` notes into a dated version entry and set
 `src/ctx/__init__.py` to that version, following the minor-per-mechanism-wave
 policy in [CONTRIBUTING.md](../CONTRIBUTING.md). Confirm that the tag exactly
 matches `ctx --version` (`vX.Y.Z` for version `X.Y.Z`). Publish a GitHub
-release for that tag. The release event checks out the tag, rebuilds and
-smoke-tests both artifacts, checks the tag/version match, and only then asks
-PyPI to mint a short-lived publishing credential.
+release for that tag. The release event checks out the tag and verifies its
+name against the package version before building either artifact. It then
+smoke-tests the wheel, checks both distributions, and requests a PyPI publishing
+credential.
+
+If a tag names the wrong version, first verify whether PyPI accepted any
+files. A fresh tag on a verified commit is the usual recovery. Moving an
+existing public tag changes which source readers fetch, so confirm that
+decision with the release owner first.
+
+For a corrected tag whose GitHub release already exists, start a fresh run
+with `gh workflow run publish.yml --ref "$RELEASE_TAG"`. This path requires
+a tag and a published GitHub release. The workflow builds the commit SHA
+recorded by the new event so the checkout and publishing provenance agree.
 
 PyPI releases are immutable. Never upload from a dirty checkout or reuse a
 version after an artifact has been accepted.

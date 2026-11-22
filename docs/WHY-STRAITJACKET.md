@@ -125,7 +125,7 @@ The package is `ctx-harness`. The command is `ctx`. It requires Python 3.11 or
 newer.
 
 ```bash
-python -m pip install --upgrade ctx-harness
+python -m pip install 'ctx-harness==0.5.0'
 cd your-repository
 ctx setup
 ctx doctor
