@@ -1,40 +1,19 @@
-# Documentation
+# Straitjacket documentation
 
-[Project README](../README.md) · [Getting started](GETTING-STARTED.md) ·
-[CLI](CLI.md) · [Configuration](CONFIGURATION.md) ·
-[Troubleshooting](TROUBLESHOOTING.md)
+Straitjacket stores captured output locally and gives coding agents a short
+result with addresses they can follow. Workers can share those addresses
+across harnesses. Start with a terminal command or connect your existing host.
 
-[Agent integrations](AGENT-INTEGRATIONS.md) · [ACP orchestration](ACP.md)
+| What you want to do | Guide |
+|---|---|
+| Install `ctx` and capture a test run | [Getting started](GETTING-STARTED.md) |
+| Delegate a step to another harness | [Harness collaboration](HARNESS-COLLABORATION.md), [ACP setup](ACP.md), [Worker routing](ROUTING.md) |
+| Manage the skills and tools offered to a session | [Capability surface](CAPABILITY-SURFACE.md) |
+| Reuse a stable prompt prefix and measure cache usage | [Query-aware selection](QUERY-AWARE-SELECTION.md), [How it works](HOW-IT-WORKS.md) |
+| Find definitions, references, or source ranges | [Investigation workflows](USE-CASES.md), [Code search](CODE-SEARCH.md) |
+| Select a Gemini 4 model in Antigravity | [Native sessions and model IDs](NATIVE-AGY-SESSIONS.md) |
 
-Straitjacket is a context and evidence sidecar for coding agents. Keep the
-coding harness that runs the model and tool loop; add bounded capture,
-retrieval, and optional edit verification. The sidecar keeps large captured tool output outside the agent's prompt.
-The agent receives a bounded deterministic digest and bounded routes back to
-the captured evidence.
-
-Handles address immutable stored bytes while retained. Model-visible retrieval
-remains bounded and subject to the current redaction policy; when redaction
-changes an exact-byte request, the response declares it.
-
-## Start here
-
-Read these pages in order:
-
-1. [How it works](HOW-IT-WORKS.md) — one command through capture, storage,
-   digesting, and retrieval.
-2. [Getting started](GETTING-STARTED.md) — install the package, configure a
-   host, and run the first capture.
-3. [Use cases](USE-CASES.md) — choose the smallest useful command for the work.
-4. [CLI guide](CLI.md) — syntax and behavior for the complete command surface.
-5. [Troubleshooting](TROUBLESHOOTING.md) — symptoms, causes, and fixes.
-
-The shortest model is:
-
-```text
-complete evidence stays in the local store
-bounded context carries facts and addresses
-retrieval returns bounded regions on demand
-```
+[Project README](../README.md) · [CLI](CLI.md) · [Configuration](CONFIGURATION.md) · [Troubleshooting](TROUBLESHOOTING.md)
 
 ## Find the right page
 
@@ -54,7 +33,7 @@ retrieval returns bounded regions on demand
 | Route work across hosts and models | [Routing](ROUTING.md) |
 | Run or resume multi-agent work | [Task ledger](TASK-LEDGER.md) |
 | Tell another harness something between turns | [Relay](RELAY.md) |
-| See what the harness boundary can and cannot carry | [Harness collaboration](HARNESS-COLLABORATION.md) |
+| Compare worker transports and handoffs | [Harness collaboration](HARNESS-COLLABORATION.md) |
 | Analyze frozen evidence with explicit model calls | [Semantic analysis](SEMANTIC.md) |
 | Investigate a bug and verify a repair under one durable budget | [Task execution](TASK-EXECUTION.md) |
 | Hand a frontier model's edit off to a cheaper one | [Prewalk](PREWALK.md) |
@@ -119,8 +98,7 @@ path is clear.
   and budget state.
 - [Relay](RELAY.md) — the cross-harness signal queue: subscriptions, delivery
   at hook boundaries, tool-call-boundary interrupts, and the bounds on each.
-- [Harness collaboration](HARNESS-COLLABORATION.md) — what the harness boundary
-  carries today, what it cannot, and the ranked backlog.
+- [Harness collaboration](HARNESS-COLLABORATION.md) — worker transports, addressed handoffs, and session lifetime.
 - [Prewalk](PREWALK.md) — hand a frontier model's validated first edit off to
   a cheaper model, opt-in.
 - [Replacement surface](REPLACEMENT-SURFACE.md) — transparent command

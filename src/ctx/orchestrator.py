@@ -136,27 +136,19 @@ Rules:
 - Decompose only where it helps. A trivial task is ONE node. Fan out only when
   subtasks are genuinely independent or form a real dependency chain.
 - Each node: {"id","goal","role","min_tier","needs":[tags],"deps":[ids],
-  "est_input_tokens","est_output_tokens"}. Optionally pin "host":"<name>",
-  "model":"<model id from the menu>", and/or "prefer":"strong". Pins are
-  advisory and never bypass unattended eligibility.
+  "est_input_tokens","est_output_tokens"}. To request a specific model,
+  set both "host" and "model" from the menu. Pins are advisory.
+  "needs" lists role tags. Name any required host-local skill in the goal.
 - Mutation nodes may declare repository-relative "targets":[paths]. Independent
   mutation nodes are eligible for isolated worktrees only when every target is
   declared and the target sets do not overlap.
 - A node may request a typed final yield with "output_schema":{...} and opt into
   fail-closed enforcement with "strict_output_schema":true.
-- min_tier is the weakest capability that can do the node: economy < standard <
-  frontier. Route by MODEL, not just harness:
-    * exploration / search / triage / verify -> economy
-    * IMPLEMENTATION is complexity-adaptive: a SIMPLE edit (a line, a small
-      well-specified function) -> economy (the cheapest model, e.g.
-      Gemini-3.5-flash-lite); a COMPLEX change (multiple files, real design,
-      tricky logic) -> standard (Gemini-3.6-flash). Judge the task and set the
-      tier; do not default everything to standard.
-    * PLANNING / architecture / hard reasoning -> frontier, and set
-      "prefer":"strong" so it takes the flagship (Opus), not the cheapest
-      frontier model — a good plan is worth the strong model.
-  The router picks the model that meets the tier and covers the roles; "prefer":
-  "cheap" (default) takes the cheapest, "strong" takes the flagship.
+- Set min_tier to the weakest tier suited to the work (economy < standard <
+  frontier). Use economy for focused search, triage, verification or a simple
+  edit; standard for complex changes; frontier for difficult planning. For a
+  frontier design node, set "prefer":"strong". Workers are selected by tier,
+  role coverage and then price. Use the available model menu for this run.
 - deps make a node wait for others; their evidence (a checkpoint:) is handed to
   it. Keep the graph acyclic. Every mutation node MUST have a separate
   downstream verify/test node; combining implementation and claimed
@@ -844,25 +836,20 @@ def _launch_host(
     path = host.path or spec.cli_bins[0]
     argv = [path, *spec.print_flag, prompt]
     if model and spec.model_flag:
+        model_args = [spec.model_flag, model]
         if spec.name == "antigravity":
-            # Current agy exposes a base Gemini id plus a mandatory effort
-            # flag. Keep the internal canonical/pricing ids stable while
-            # adapting them at the vendor CLI boundary.
-            launch_model = model.removesuffix("-preview").removesuffix("-lite")
-            effort = "high" if "pro" in launch_model else (
-                "medium" if "3.6" in launch_model else "low"
-            )
-            argv = [
-                path,
-                spec.model_flag,
-                launch_model,
-                "--effort",
-                effort,
-                *spec.print_flag,
-                prompt,
-            ]
-        else:
-            argv = [path, spec.model_flag, model, *spec.print_flag, prompt]
+            # Preserve the historical CLI mapping only for the models that
+            # needed it. Current agy accepts base IDs and exact effort slugs.
+            legacy_models = {
+                "gemini-3.1-pro": ("gemini-3.1-pro", "high"),
+                "gemini-3.1-pro-preview": ("gemini-3.1-pro", "high"),
+                "gemini-3.6-flash": ("gemini-3.6-flash", "medium"),
+                "gemini-3.5-flash-lite": ("gemini-3.5-flash", "low"),
+            }
+            if model in legacy_models:
+                native_id, effort = legacy_models[model]
+                model_args = [spec.model_flag, native_id, "--effort", effort]
+        argv = [path, *model_args, *spec.print_flag, prompt]
     settings_tmp: str | None = None
     try:
         if spec.name == "claude":
@@ -1110,11 +1097,12 @@ def invoke_coordinator(
     """Ask the cheapest harness to emit a ctx.route/v1 plan. Returns the parsed
     dict, or None if no coordinator is available or it produced no parseable
     plan (the caller then uses fallback_route). Fail-open."""
-    coord = pick_coordinator(hosts)
+    unattended = [host for host in hosts if host.spec.unattended]
+    coord = pick_coordinator(unattended)
     if coord is None:
         return None
     prompt = (
-        ROUTING_CONTRACT + "\n\n" + build_menu(hosts) + f"\n\nTask: {task}\n" + extra
+        ROUTING_CONTRACT + "\n\n" + build_menu(unattended) + f"\n\nTask: {task}\n" + extra
     )
     usage_index: int | None = None
     if usage_sink is not None:
@@ -2308,18 +2296,20 @@ def orchestrate(
     if not any(h.installed for h in hosts):
         return 1, (
             "ctx orchestrate: no installed harnessable CLI to orchestrate across.\n"
-            "Install a supported CLI (claude, codex, antigravity); see `ctx wrap detect`."
+            "Install a supported CLI or configure an ACP endpoint with `ctx setup`; "
+            "see `ctx wrap detect`."
         )
     if not any(h.installed and h.spec.unattended for h in hosts):
         return 1, (
             "ctx orchestrate: no installed host can run unattended.\n"
-            "Install or enable claude, codex, or antigravity-sdk; interactive "
-            "agy remains available only through an explicitly pinned route."
+            "Configure an ACP endpoint or install claude, codex, or antigravity-sdk. "
+            "The orchestrator does not auto-select the native agy CLI."
         )
 
     note = ""
     coordinator_usage: list[ActualUsage | None] = []
     plan: RoutePlan
+    preview = dry_run or (getattr(cfg, "confirm", False) and not force_run)
     if resume:
         try:
             plan, task = _plan_from_ledger(ws, resume, hosts)
@@ -2334,6 +2324,9 @@ def orchestrate(
     elif fast_kind != "general":
         plan = fallback_route(task, hosts, cfg)
         note = f"deterministic {fast_kind} fast path; coordinator skipped"
+    elif preview:
+        plan = fallback_route(task, hosts, cfg)
+        note = "deterministic preview; a live coordinator may choose a different route"
     else:
         unattended = [host for host in hosts if host.spec.unattended]
         coordinator = pick_coordinator(unattended)
@@ -2365,7 +2358,7 @@ def orchestrate(
     out = [render_route_plan(plan)]
     if note:
         out.append(note)
-    if dry_run or (getattr(cfg, "confirm", False) and not force_run):
+    if preview:
         out.append(
             "dry run — no harness launched." if dry_run
             else "[orchestrate] confirm=true — re-run with --run to execute."

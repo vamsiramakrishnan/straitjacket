@@ -1,19 +1,19 @@
 ---
 title: straitjacket
-description: Context and evidence sidecar for coding agents. Keep your harness; add bounded tool output, retrievable evidence, and verified edits.
+description: Delegate work across coding harnesses, reuse prompt prefixes, and retrieve the code or test output a worker needs.
 template: splash
 hero:
-  title: Your coding agent. A sidecar for its evidence.
+  title: straitjacket
   tagline: >-
-    Keep your coding harness. Straitjacket adds bounded tool output, retrievable
-    evidence, and optional verified edits alongside the agent you already use.
+    Give coding agents a shared way to find code, check a result, and hand it
+    to the next worker. Keep your existing harness and model.
   actions:
-    - text: Capture your first result
+    - text: Run your first command
       link: /straitjacket/start/getting-started/
       icon: right-arrow
       variant: primary
-    - text: Choose a workflow
-      link: /straitjacket/guides/use-cases/
+    - text: Delegate across harnesses
+      link: /straitjacket/guides/harness-collaboration/
       variant: secondary
     - text: GitHub
       link: https://github.com/vamsiramakrishnan/straitjacket
@@ -31,104 +31,46 @@ hero:
   <a href="https://github.com/deepseek-ai/deepseek-harness"><img src="/straitjacket/agents/dsh.svg" width="36" height="36" alt="DeepSeek Harness" title="DeepSeek Harness" /></a>
 </p>
 
-## One command to try
+## Start with a task
 
-The coding harness owns the model and tool loop. Straitjacket is its context
-and evidence sidecar, connected through CLI commands, MCP tools, and supported
-hooks. No separate daemon or container is required.
+| Task | How to do it |
+|---|---|
+| Hand a code review from one harness to another | [Configure an ACP worker](/straitjacket/guides/acp/). [Preview the route](/straitjacket/guides/routing/) to see which harness and model gets each step. Workers pass checkpoints and evidence addresses to their dependents. |
+| Decide which skills a model sees | [Inspect the capability surface](/straitjacket/design/capability-surface/). On Claude Code, compare the estimated cost of a skill listing with its deferred body and choose a launch profile. |
+| Trace a symbol across a repository | [Search for the definition and follow its references](/straitjacket/guides/use-cases/). Open the reported span when you need the implementation. |
+| Keep a repeated prompt prefix cacheable | [Put fixed reference material before the changing evidence and question](/straitjacket/guides/query-aware-selection/). Compare provider-reported cache usage and total task cost. |
+| Run Gemini 4 Hydrogen, Neon, Carbon, or Argon | [Select a model for Antigravity](/straitjacket/guides/native-agy-sessions/). Run `agy models` for your account's native IDs. ACP uses its endpoint's advertised ID. |
 
-Keep using Claude Code, Codex, Antigravity, or your preferred coding agent.
-Straitjacket works alongside it: keep your interface, models, login, and
-permissions, and add bounded access to captured evidence. Any agent with a
-terminal can use `ctx` directly.
+## Capture a failure
 
-```bash
+In a Python repository with tests:
+
+```sh
 python -m pip install --upgrade ctx-harness
 ctx run -- pytest -q
 ```
 
-Run this in a repository with tests. Python 3.11+ is required. Host integration
-is optional. The package is `ctx-harness`; the command is `ctx`.
+For a long test run, the agent gets the outcome, failed test names, and an
+address for the captured output. A failed test run returns a nonzero status. Replace the sample
+handle below with the address from your digest.
 
-A failed command remains a failed command. For a large output, the agent gets
-an outcome, a typed digest, and a `run:` address. Complete captured stdout and
-stderr stay in the local store.
-
-Use the address returned by your run:
-
-```bash
-ctx get run:<id>#stdout --lines 120:180
-ctx search run:<id>#stdout "AssertionError"
+```sh
+ctx search run:ba3d1020ee8f#stdout 'AssertionError'
 ```
 
-`<id>` is a placeholder. Large retrievals return a bounded region and a
-continuation. When the loop is useful, run `ctx setup` and `ctx doctor` to
-configure a supported coding host.
+The CLI requires Python 3.11+. Host hooks are optional. The local plaintext
+store retains up to the configured capture limit. [Follow one command through capture and retrieval](/straitjacket/start/how-it-works/).
 
-## Pick the job
+## What the benchmarks tell you
 
-| Job | First tool | Result |
-|---|---|---|
-| Investigate noisy tests, builds, or logs | `ctx run` | Outcome and complete captured evidence |
-| Locate code before reading files | `ctx map`, `ctx def`, `ctx refs` | Structural views and source coordinates |
-| Compare two attempts | `ctx diff` | Outcome and evidence changes |
-| Apply an observed edit and check it | `ctx edit replace`, `ctx edit verify` | Plan, apply receipt, and checks bound to exact bytes |
-| Resume delegated work | `ctx orchestrate`, `ctx task show` | Attempts, recovery, budget, and persisted task state |
+A 20,001-line fixture used 302,628 tokens as raw text. Its 531-token digest
+retained the quiet event at line 14,238 and a retrieval address. In a separate
+live comparison on three small tasks, both agents solved all three and the
+wrapped agent cost more. Use task completion and provider usage to decide
+where wrapping pays. [Log fixture](https://github.com/vamsiramakrishnan/straitjacket/blob/main/evals/field-needle-2026-07-20.md) ·
+[Live comparisons](https://github.com/vamsiramakrishnan/straitjacket/blob/main/evals/agentbench/RESULTS.md).
 
-[Capture and retrieve](/straitjacket/start/getting-started/) ·
-[Edit and verify](/straitjacket/guides/edit-loop/) ·
-[CLI reference](/straitjacket/guides/cli/)
-
-## Evidence stays available after the first turn
-
-Typed profiles extract failed test identities, diagnostic locations, unusual
-log events, and JSON structure. A deterministic renderer fits those facts into
-a budget and declares what it omitted. There is no model call in this path.
-
-Stored handles identify immutable bytes while retained. Anchored repository
-reads verify the observed span, relocate unchanged content, or refuse stale
-coordinates. Model-visible retrieval follows the current redaction policy.
-
-[Follow the data path](/straitjacket/start/how-it-works/).
-
-## Evidence for the mechanism, and for the trade-off
-
-| Measurement | Finding | What it establishes |
-|---|---|---|
-| Deterministic field-needle fixture | 302,628 input tokens became 531 output tokens; the quiet target at line 14,238 and a retrieval address remained | Bounded evidence delivery on that fixture |
-| Small live canary, three tasks with one repeat | Both arms solved 3/3; the contained arm cost more and took longer | Wrapping small work can be a regression |
-| Paired edit and prewalk runner | Requires live paired outcomes before selecting another strategy | A way to measure a policy; no live improvement claim yet |
-
-The needle fixture measures address emission, not a retrieval round trip.
-[Read its receipt](https://github.com/vamsiramakrishnan/straitjacket/blob/main/evals/field-needle-2026-07-20.md),
-[the live counterexamples](https://github.com/vamsiramakrishnan/straitjacket/blob/main/evals/agentbench/RESULTS.md),
-and [the edit-policy method](https://github.com/vamsiramakrishnan/straitjacket/blob/main/evals/EDIT-MATRIX.md).
-
-Use containment when output is large, early, or repeatedly carried through a
-task. Keep small, complete results native. Compare completion, total usage,
-latency, and retrieval count together.
-
-## Know the integration boundary
-
-| Entry point | Support |
-|---|---|
-| Direct CLI | Capture and retrieval without host hooks |
-| Claude Code | Command rewrite and oversized-result substitution on supported hooks |
-| Codex | Implemented and contract-tested; live CLI receipt pending |
-| Antigravity | Deny recognized floods and return a bounded replacement command; no output substitution |
-| Hermes, OMP, OpenCode, DSH | Bounded MCP retrieval and explicit terminal workflows; no interception or orchestration adapter yet |
-
-[Connect these agents](/straitjacket/guides/agent-integrations/) for setup,
-launch commands, verification, and removal.
-
-[Host capabilities](/straitjacket/guides/host-capabilities/) states the exact
-contract. Commands retain the invoking user's authority. Captured artifacts
-are local plaintext; redaction of the model's view is not encryption at rest.
-Artifacts become eligible for collection after the configured horizon and remain
-until `ctx gc` runs. The project is pre-1.0.
-
-## Continue
-
+[Host capabilities](/straitjacket/guides/host-capabilities/) ·
+[CLI reference](/straitjacket/guides/cli/) ·
 [Configuration](/straitjacket/guides/configuration/) ·
-[Troubleshooting](/straitjacket/guides/troubleshooting/) ·
-[Documentation map](https://github.com/vamsiramakrishnan/straitjacket/blob/main/docs/README.md)
+[Troubleshooting](/straitjacket/guides/troubleshooting/)

@@ -17,7 +17,7 @@ export default defineConfig({
     starlight({
       title: 'straitjacket',
       description:
-        'Context and evidence sidecar for coding agents. Keep your harness; add bounded tool output, retrievable evidence, and verified edits.',
+        'Delegate work across coding harnesses, find code by symbol, and reuse prompt prefixes.',
       social: [
         {
           icon: 'github',
@@ -38,7 +38,13 @@ export default defineConfig({
         {
           label: 'Guides',
           items: [
-            { label: 'Use cases', slug: 'guides/use-cases' },
+            { label: 'Workflows', slug: 'guides/use-cases' },
+            { label: 'Harness collaboration', slug: 'guides/harness-collaboration' },
+            { label: 'Worker routing', slug: 'guides/routing' },
+            { label: 'Skills and tools', slug: 'design/capability-surface' },
+            { label: 'Prompt prefixes and evidence', slug: 'guides/query-aware-selection' },
+            { label: 'Code search', slug: 'guides/code-search' },
+            { label: 'Gemini model selection', slug: 'guides/native-agy-sessions' },
             { label: 'Edit and verify', slug: 'guides/edit-loop' },
             { label: 'Host capabilities', slug: 'guides/host-capabilities' },
             { label: 'Pastes and media', slug: 'guides/pastes-and-media' },
@@ -73,7 +79,6 @@ export default defineConfig({
             { label: 'Priced context', slug: 'design/priced-context' },
             { label: 'Lossless rescue', slug: 'design/lossless-rescue' },
             { label: 'Replacement surface', slug: 'design/replacement-surface' },
-            { label: 'Capability surface', slug: 'design/capability-surface' },
             { label: 'Substrate', slug: 'design/substrate' },
             { label: 'ctx ask', slug: 'design/ask' },
           ],

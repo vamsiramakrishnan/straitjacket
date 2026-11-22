@@ -1,33 +1,10 @@
 #!/usr/bin/env python3
 """`ctx agy` — a headless, harnessed Antigravity CLI built on the Agent SDK.
 
-Why this exists
----------------
-The official ``agy`` binary cannot be harnessed the way Claude Code and Codex
-can, for two independent reasons:
-
-1. **It cannot be driven headlessly.** It authenticates by interactive OAuth
-   browser login and ignores ``GEMINI_API_KEY``, so no CI job, cron, or
-   orchestrator node can launch it.
-2. **Its hook contract cannot contain anything after the fact.** Per
-   https://antigravity.google/docs/hooks, PreToolUse has no field for modified
-   arguments and PostToolUse's only legal output is ``{}``. So on that host the
-   birth gate can only *deny*, and there is no output-side safety net at all
-   (see ADR 005).
-
-This shim sidesteps both by using the ``google-antigravity`` **Agent SDK**,
-which authenticates with ``GEMINI_API_KEY`` and — crucially — lets the embedder
-**own the tools**. Containment stops being something applied *to* a tool result
-and becomes a property of the tool itself: the flooding builtins are disabled
-and replaced with ``ctx``-backed equivalents, so an oversized result is bounded
-*before it is ever returned to the model*. No substitution API is required,
-which is exactly the capability the published hook contract withholds.
-
-The SDK's own hooks do not help here and are deliberately not used for
-containment: ``PostToolCallHook`` is an ``InspectHook``, so like the published
-PostToolUse contract it can observe a result but not replace it. The tool
-boundary is the only place where substitution is actually possible, so that is
-where this shim does the work.
+The worker authenticates with ``GEMINI_API_KEY`` and owns its tool
+implementations. The configured tools use ctx to bound evidence before they
+return it to the model. The native Antigravity CLI uses its own credentials,
+tools, and hook contract.
 
 What is replaced
 ----------------

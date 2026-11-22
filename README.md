@@ -1,21 +1,9 @@
 # straitjacket
 
-**Context and evidence sidecar for coding agents.**
-
-Keep your coding harness. Straitjacket runs alongside it, captures command
-output in a local artifact store, and returns a bounded, deterministic digest.
-The agent can search the complete output or
-retrieve a cited region without loading the whole log into its conversation.
-
-**Keep using your coding agent.** Claude Code, Codex, and Antigravity remain
-supported. Straitjacket adds capture, bounded retrieval, and an optional verified
-edit workflow to the agent you choose; you keep its interface, models, login,
-and permissions. Any terminal-capable agent can use the `ctx` CLI.
-
-The coding harness owns the model and tool loop. Straitjacket supplies capture,
-retrieval, and optional edit verification through CLI commands, MCP tools, and
-supported hooks. “Sidecar” describes this supporting role; no separate daemon
-or container is required. The package name remains `ctx-harness`.
+Straitjacket helps coding agents find the code they need and hand work to each
+other. A worker can give the next worker a failing test, a source location, or
+a verified patch without forwarding its conversation. Your harness still runs
+the model, authenticates the user, and controls its tools.
 
 <p>
   <a href="https://code.claude.com/"><img src="assets/agents/claude.svg" width="36" height="36" alt="Claude Code" title="Claude Code"></a>
@@ -27,222 +15,138 @@ or container is required. The package name remains `ctx-harness`.
   <a href="https://github.com/deepseek-ai/deepseek-harness"><img src="assets/agents/dsh.svg" width="36" height="36" alt="DeepSeek Harness" title="DeepSeek Harness"></a>
 </p>
 
-v0.44.0 · Python 3.11+ · package `ctx-harness` · command `ctx` · pre-1.0 · Apache-2.0
+Python 3.11+ · `ctx-harness` v0.44.0 · Apache-2.0 · [Documentation](https://vamsiramakrishnan.github.io/straitjacket/)
 
-[Start here](docs/GETTING-STARTED.md) · [Choose a workflow](docs/USE-CASES.md) ·
-[CLI reference](docs/CLI.md) · [Documentation site](https://vamsiramakrishnan.github.io/straitjacket/)
+| If you want to… | Start here |
+|---|---|
+| Give exploration, implementation, and verification to different harnesses | [Delegate through ACP](docs/ACP.md) and [inspect the route](docs/ROUTING.md) |
+| Control which skills and tools a session sees | [Inspect skill listings and configure a launch profile](docs/CAPABILITY-SURFACE.md) |
+| Reuse a prompt prefix as the question and evidence change | [Build a stable prefix](docs/QUERY-AWARE-SELECTION.md) and [measure the session](docs/HOW-IT-WORKS.md) |
+| Find an implementation or call site without reading whole files | [Search by symbol, follow references, and open a source range](docs/USE-CASES.md) |
+| Run Gemini 4 Hydrogen, Neon, Carbon, or Argon | [Discover and select an Antigravity model](docs/NATIVE-AGY-SESSIONS.md) |
 
-## Capture your first result
+## Try it on a failing test
 
-From a repository with a test suite:
+In a repository with a pytest suite, run:
 
-```bash
+```sh
 python -m pip install --upgrade ctx-harness
 ctx run -- pytest -q
 ```
 
-No host integration is required for this command. A failed test command remains
-a failed command. straitjacket changes how its evidence reaches the agent.
+For a long failure, `ctx` returns the
+test names, a digest, and an address for the captured output. For a failing test command, the digest records the child
+exit code and `ctx run` returns 3. To find the traceback, replace the sample
+handle below with the one from your run and search the stream pytest used.
 
-A large pytest result identifies failing tests and provides a `run:` address.
-Use the address and coordinates printed by your run:
-
-```bash
-ctx get run:<id>#stdout --lines 120:180
-ctx search run:<id>#stdout "AssertionError"
+```sh
+ctx search run:ba3d1020ee8f#stdout 'AssertionError'
 ```
 
-`<id>` is a placeholder, not a checked-in sample you can retrieve. The stored
-artifact contains the complete captured stream. Retrieval is bounded too: a
-large request returns a smaller region with a continuation.
+Use the line range in the search result with `ctx get`. The default capture
+limit is 64 MiB per stream. If output crosses it, the digest identifies the
+discarded middle. To connect your coding harness, run `ctx setup` and then
+`ctx doctor`. [Installation and host setup](docs/GETTING-STARTED.md).
 
-When that loop is useful, connect the host you already use:
+## Delegate work across harnesses
 
-```bash
-ctx setup
-ctx doctor
+`ctx orchestrate` assigns each step to a harness and model using its capability
+requirement and configured costs. A worker receives the task and checkpoints
+from its dependencies. The task ledger records attempts and handoffs, so a
+resumed route can reuse finished work. The relay lets a peer send an evidence
+address while work is in progress. [Worker routing](docs/ROUTING.md) ·
+[Task ledger](docs/TASK-LEDGER.md) · [Relay](docs/RELAY.md).
+
+Agent Client Protocol (ACP) lets Straitjacket start and cancel workers through
+one interface. Install and authenticate an adapter, then configure the exact
+model ID it advertises. For example, with OpenCode:
+
+```sh
+ctx setup --host opencode --acp --acp-model 'provider/model-id'
+ctx orchestrate 'Review the current diff' --dry-run
 ```
 
-Setup preserves unrelated settings and reports the changes it makes.
-[Installation, host setup, and removal](docs/GETTING-STARTED.md).
+Replace `provider/model-id` with an ID from that endpoint. The preview shows
+worker assignments. Use the [checkout installation](#development) for model-free
+previews of general tasks and the new Gemini 4 routing entries. Running the route starts model work. Each ACP attempt opens
+a fresh session and receives bounded retrieval and edit tools over MCP.
+[ACP setup for all seven harnesses](docs/ACP.md).
 
-## Choose the work you want to improve
+The host decides when to load a skill. On Claude Code, `ctx surface inventory`
+estimates the cost of listing a skill separately from loading its body.
+`ctx wrap claude --surface auto` can shorten listings for skills the project's
+session history shows it never used. [Skill selection and launch profiles](docs/CAPABILITY-SURFACE.md).
 
-| Job | Use | What you can inspect afterward |
-|---|---|---|
-| Diagnose a long test run, build, or log | `ctx run -- <command>` | Outcome, typed digest, complete stdout/stderr |
-| Find the relevant symbol before reading files | `ctx map`, `ctx def`, `ctx refs` | Bounded structural views and source coordinates |
-| Compare a failure with the next attempt | `ctx diff run:A run:B` | Changes in outcomes and evidence |
-| Run a known sequence of checks | `ctx seq`, `ctx q` | Locally composed results with evidence addresses |
-| Edit the source you actually observed | `ctx edit replace`, `ctx edit verify` | Sealed plan, apply receipt, checks tied to file hashes |
-| Continue a task across workers | `ctx orchestrate`, `ctx task show` | Persisted task state, attempts, recovery, and budget records |
-| Tell another harness something, between turns | `ctx relay watch`, `ctx relay signal` | Queued signals, delivery receipts, and what each harness has seen |
-| Analyze selected evidence with a model | `ctx semantic prepare/run/resume` | Bounded partitions, citation validation, explicit budgets, and saved partial findings |
-| Investigate and verify a repair | `ctx task prepare/run/resume` | One durable budget from evidence gathering through verified patch; [workflow and SDK](docs/TASK-EXECUTION.md) |
+## Spend fewer turns finding code
 
-Start with capture and retrieval. Add editing or orchestration when the task
-needs their contracts. See the [verified edit loop](docs/EDIT-LOOP.md) for
-snapshot-based replacements, typed recovery, and prewalk handoffs.
+In a Straitjacket checkout, these commands locate the reference parser, read
+its definition, and find uses under the package:
 
-If your harness owns its tools, use the provider-independent
-[tool SDK](docs/TOOL-SDK.md): `ToolSession.run/get/search/query` returns bounded
-evidence with explicit command termination, supports async cancellation, and
-exports observed artifacts as a capsule. Other languages can use
-`ctx run --json`. These entry points require a build containing the change.
+```sh
+ctx search repo: sym:parse_ref
+ctx def repo:src/ctx/refs.py:parse_ref
+ctx refs parse_ref --path src/ctx
+```
 
-[Semantic analysis](docs/SEMANTIC.md) is an explicit depth-one map over frozen
-evidence through a caller-configured model driver. Its findings are labeled
-inferences; complete processing does not establish complete evidence selection
-or a correct patch. Deterministic capture and retrieval never invoke it implicitly.
+If all you have is a bug report, start with `ctx pack "your task"` for ranked
+starting points. If you already have a path and symbol, go straight to
+`ctx def`. The result identifies the lookup method and its coverage.
+[Code search](docs/CODE-SEARCH.md) · [Investigation workflows](docs/USE-CASES.md).
 
-## Why preserve the output outside the prompt?
+## Keep repeated input cheap
 
-A build log can outlive the decision it supported. Once pasted into the
-conversation, it can occupy context on every later turn. Truncation removes
-bytes the agent may need later; a free-form summary cannot provide the exact
-original evidence.
+A large result early in a session can be read and billed on every later turn.
+Capture it once, then retrieve just the evidence that changes the next decision.
+Straitjacket keeps its own shared instructions stable across turns. For a
+custom model client, it can also serialize fixed reference material ahead of a
+changing question and selected excerpts:
 
-straitjacket retains those bytes and gives the prompt a smaller view. Typed
-profiles keep test identities, diagnostic locations, unusual log events, or
-JSON structure according to the output family. They declare omissions and
-provide retrieval addresses. Each digest of a large text output carries an
-evidence map: exact counts of every error-like line and distinct message, the
-top ones as verbatim excerpts with real line numbers, the rest listed, so what
-is not shown is still accounted for. By default there is no model call and no
-network access in the digest path; an opt-in picker, which only a file in
-the account's own home directory can enable, can ask a decision
-endpoint which messages to expand (see docs/CONFIGURATION.md for exactly what
-it sends).
+```sh
+ctx compress build.log --query 'Which target failed?' --cache-prefix reference.txt
+```
 
-Stored `run:`, `blob:`, and `snapshot:` handles identify immutable content while
-retained. Live `repo:` addresses can carry a content anchor: reads verify the
-span, relocate unchanged content, or refuse stale evidence.
+Send the returned `cache_wrap.prefix` first and `cache_wrap.suffix` second.
+The same reference produces the same prefix bytes across questions. The
+provider determines reuse. To evaluate savings, compare runs on the same task
+and model. Record completion, cache reads and writes, uncached input, output,
+and cost. `ctx stats --session` can report observed usage when available.
+[Prompt layout](docs/QUERY-AWARE-SELECTION.md) · [Session measurement](docs/HOW-IT-WORKS.md).
 
-[Follow one command through the system](docs/HOW-IT-WORKS.md).
+## Select a Gemini 4 model
 
-## Decide whether to use it
+Run `agy models` with the account that will do the work. In the native
+`ctx collab` workflow, pass a listed slug such as `gemini-4-hydrogen-high` to
+`--model`. For ACP, use the ID advertised by the ACP endpoint. Availability
+and reasoning levels depend on the account and client. The [Antigravity guide](docs/NATIVE-AGY-SESSIONS.md)
+covers Hydrogen, Neon, Carbon, and Argon, including how to start and continue a
+native conversation.
 
-| Your workload | Starting choice |
+## What the measurements show
+
+| Workload | Observed result |
 |---|---|
-| Large outputs early in a long investigation | Capture them and retrieve only the evidence needed next |
-| Repeated repository navigation | Use structural queries; watch retrieval count as well as token volume |
-| Small output in a short task | Keep native execution; wrapping can add overhead |
-| Need predictable local behavior without another model call | Use the CLI directly |
-| Need transparent interception | Check the host matrix below before adopting |
+| [20,001-line log fixture](evals/field-needle-2026-07-20.md) | The raw log took 302,628 tokens. The 531-token digest retained the quiet event at line 14,238 and an address for further reading. This fixture checks address emission. |
+| [Source ranges after edits](evals/anchor-drift-2026-08-20.md) | Across 1,920 lookups, anchored ranges relocated 1,452 times, verified in place twice, refused 466 times, and returned the wrong content zero times. |
+| [Three live canary tasks, one run per arm](evals/agentbench/RESULTS.md) | Both arms solved 3/3. With the wrapper, median cache hit rate rose from 96.5% to 97.5% and total cost rose from $0.67 to $0.92. |
+| [Finding files on 14 DeepSWE tasks](evals/agentbench/results/pack_recall.json) | Among the top eight suggestions, `ctx pack` found 54.0% of existing files touched by the reference fix on average. Ranking by grep count found 42.9%. Grep found at least one relevant file on all 14 tasks, the pack on 12. |
+| [DeepSWE, eight Python tasks, Haiku, 60-turn cap](evals/agentbench/deepswe-2026-09-13.md) | The wrapped arm passed 177 held-out fail-to-pass test IDs on committed patches versus 54 for plain Claude. The runs cost $5.74 and $5.42 respectively. Neither arm fully resolved a task. |
 
-Measure task completion, total usage, elapsed time, and retrieval calls together.
-Compression alone does not establish a better coding outcome.
+## Integration and storage
 
-## Evidence, including the losses
+The CLI works in any terminal. Claude Code and Codex can replace oversized
+results after a command runs. Antigravity CLI can rewrite supported calls
+before execution. Hermes, Oh My Pi, and OpenCode can rewrite arguments and
+replace text results. DeepSeek Harness can gate calls and replace text results.
+The [host matrix](docs/HOST-CAPABILITIES.md) lists version-specific behavior
+and distinguishes live observations from adapter tests.
 
-The repository publishes fixtures, harnesses, raw records, and negative results
-in [`evals/`](evals/). Two mechanism tests establish the core behavior:
+Captured artifacts live in a local plaintext store. Model-visible reads follow
+the configured redaction policy. Unpinned artifacts become eligible for
+collection after 30 days by default and remain until `ctx gc` runs. Commands
+run with the invoking user's permissions. [Configuration](docs/CONFIGURATION.md).
 
-- A deterministic 20,001-line log contains one quiet target at line 14,238 and
-  two loud `ERROR` controls. Raw delivery uses 302,628 `o200k_base` tokens.
-  straitjacket emits 531, retains the quiet target, and emits an address for the
-  omitted region. This fixture checks address emission, not a retrieval round
-  trip. See the
-  [field-needle receipt](evals/field-needle-2026-07-20.md).
-- Across 1,920 repository-span resolutions after edits, anchored addresses
-  relocated 1,452 times, verified in place twice, refused 466 times, and returned
-  the wrong content zero times. See the
-  [anchor-drift receipt](evals/anchor-drift-2026-08-20.md).
-- The task-ledger replay exercises persisted orchestration state across resume,
-  typed recovery, and budget reconciliation. See the
-  [task-ledger receipt](evals/task-ledger-replay-2026-09-02.md).
-
-Those results test delivery and addressing. They do not prove that every agent
-task becomes cheaper or faster.
-
-The live agent referee records the counterexample. On three small canary tasks,
-with one repeat per task, both native and contained arms solved 3/3, but the
-contained arm used more input tokens, cost more, and took longer. In one
-navigation-heavy dogfood run with a 40-turn cap, the native arm reproduced
-eight failing test nodes and the wrapped arm reproduced five. That comparison
-tests the full wrapper bundle, not containment alone, and its model field is
-unrecorded. The wrapped arm made 210 retrieval calls; without a retrieval
-ablation, those calls are a plausible contributor rather than a proven cause.
-See the
-[agent-harness results](evals/agentbench/RESULTS.md).
-
-The DeepSWE v1.1 receipt (eight Python tasks, haiku, 60-turn cap) is the
-sharper counterexample: under v0.39.0 the wrapped arm cost 27% more and read
-36% more input than plain Claude for no gain, and the transcripts put both
-numbers on the wrapper — the observer proxy had switched Claude Code's deferred
-tool loading off, and small tool results came back as receipts. With those
-fixed the input gap is 3% and the wrapped arm passes more held-out tests. Run
-again with no turn cap under DeepSWE's own three-hour budget, no arm resolved a
-task outright with haiku and every session stopped on its own; ctx as the host
-(`ctx agent`, its own indexed retrieval tools, no turn-one pack) passed 25% more
-held-out tests than plain Claude at the same cost, in more turns — more turns
-did not mean more money. See the
-[DeepSWE receipt](evals/agentbench/deepswe-2026-09-13.md).
-
-That boundary matters. straitjacket is most useful when output is large, early,
-repeated, or likely to survive many turns. A short task with small, hot-cached
-results may be better left native. The target is matched task success with less
-context residency—not the highest compression ratio.
-
-## Host support
-
-| Entry point | Current behavior |
-|---|---|
-| Direct `ctx` CLI | Capture and retrieval without a host plugin |
-| Claude Code | Commands run as written and the host decides about them; oversized results are replaced by a digest after the command runs. Capture at birth is opt-in (`steering = "rewrite"`) |
-| Codex | Commands run as written under Codex's own approval; oversized results replaced after the command runs. Contract-tested; live CLI receipt pending |
-| Antigravity | Rewrites by default (it cannot replace output): recognized floods in `run_command` and `read_file` in place (`agy` 1.5.5), deny and name the bounded command for other tools; no output substitution |
-| Hermes / Open Hermes | Native argument rewriting and text-output replacement; active-profile plugin + MCP |
-| Oh My Pi (`omp`) | Native argument rewriting and text-output replacement; project plugin + MCP |
-| OpenCode | Native argument rewriting and text-output replacement; project plugin + MCP |
-| DeepSeek Harness (`dsh`) | Native gating and text-output replacement; sealed arguments require an explicit retry |
-
-`ctx setup` preserves unrelated settings and refreshes managed blocks. For
-Codex TOML and OpenCode JSONC, preview exact source edits with
-`ctx setup --host codex --host opencode --preview`; accept safe additions with
-`--apply`. Conflicting user values still refuse. See
-[setup and removal](docs/GETTING-STARTED.md) and
-[host capabilities](docs/HOST-CAPABILITIES.md) for exact coverage.
-
-[Set up Hermes, OMP, OpenCode, or DSH](docs/AGENT-INTEGRATIONS.md). These adapters
-have executable contract tests; live model-session receipts remain pending.
-They require a build containing this change.
-
-All seven agents can use [ACP orchestration](docs/ACP.md) with a configured
-endpoint and model: `ctx setup --host opencode --acp --acp-model provider/model-id`.
-ACP workers receive bounded retrieval and verified edit tools through MCP.
-Native hook coverage still depends on the agent's API; ACP does not expand it.
-
-## Boundaries
-
-straitjacket is not:
-
-- a process sandbox—commands retain the invoking user's authority;
-- agent memory—it contains current tool evidence rather than choosing which old
-  memories to recall;
-- a free-form summarizer—digests are deterministic, typed, and addressable;
-- a reason to wrap every command—the native path is often right for small work.
-
-The local store contains captured command output as plaintext. Thirty days is
-the default GC eligibility horizon; artifacts remain until `ctx gc` runs.
-`ctx gc --retention-days N` can override the horizon, while pins and active
-checkpoint leases survive collection. Treat the store with the same care as
-the source and logs it captures. At-rest encryption is not implemented today.
-
-The project is pre-1.0. Command and profile contracts may still change between
-minor releases.
-
-## Read next
-
-| Next step | Guide |
-|---|---|
-| Install, configure, or remove a host integration | [Getting started](docs/GETTING-STARTED.md) |
-| Apply and verify an observed edit | [Edit loop](docs/EDIT-LOOP.md) |
-| Compare native, anchored, and prewalk strategies | [Paired evaluations](evals/EDIT-MATRIX.md) |
-| Tune budgets and retention | [Configuration](docs/CONFIGURATION.md) |
-| Resolve an error | [Troubleshooting](docs/TROUBLESHOOTING.md) |
-| Understand modules or contribute | [Architecture](docs/ARCHITECTURE.md), [Contributing](CONTRIBUTING.md) |
-| Browse the full reference | [Documentation map](docs/README.md), [Changelog](CHANGELOG.md) |
+[Verified edits](docs/EDIT-LOOP.md) · [Tool SDK](docs/TOOL-SDK.md) ·
+[CLI reference](docs/CLI.md) · [All guides](docs/README.md) · [Changelog](CHANGELOG.md)
 
 ## Development
 

@@ -567,7 +567,9 @@ def test_invoke_coordinator_parses_launch_output(state_home, git_workspace):
         {"id": "a", "goal": "x", "min_tier": "economy", "deps": []}]})
 
     def launch(host, root, prompt, exe, *, timeout, model=""):
-        # the coordinator is the cheap host, pinned to its coord model
+        # The native Antigravity CLI is cheaper but requires an operator.
+        assert host.name == "claude"
+        assert "  antigravity:" not in prompt
         assert model == host.spec.coord_model
         return 0, f"reasoning...\n{plan_json}", ""
 
@@ -726,12 +728,13 @@ def test_orchestrate_dry_run_uses_fallback_and_does_not_execute(state_home, git_
     ws = make_ws(git_workspace)
     monkeypatch.setattr("ctx.orchestrator.installed_harnessable",
                         lambda **kw: _hosts("claude", "antigravity"))
-    # No coordinator output -> deterministic fallback route.
-    monkeypatch.setattr("ctx.orchestrator.invoke_coordinator", lambda *a, **k: None)
-    code, text = orchestrate(ws, "do a thing", dry_run=True)
+    def unexpected_launch(*args, **kwargs):
+        pytest.fail("dry-run launched a coordinator or worker")
+
+    code, text = orchestrate(ws, "do a thing", dry_run=True, launch=unexpected_launch)
     assert code == 0
     assert "dry run" in text and "estimated total" in text
-    assert "run complete" not in text
+    assert "deterministic preview" in text
 
 
 def test_orchestrate_fast_path_skips_coordinator(state_home, git_workspace, monkeypatch):
@@ -758,8 +761,10 @@ def test_orchestrate_confirm_gate(state_home, git_workspace, monkeypatch):
     assert ws.config.orchestrate.confirm is True
     monkeypatch.setattr("ctx.orchestrator.installed_harnessable",
                         lambda **kw: _hosts("claude", "antigravity"))
-    monkeypatch.setattr("ctx.orchestrator.invoke_coordinator", lambda *a, **k: None)
-    code, text = orchestrate(ws, "t", force_run=False)
+    def unexpected_launch(*args, **kwargs):
+        pytest.fail("confirm-only preview launched a coordinator or worker")
+
+    code, text = orchestrate(ws, "t", force_run=False, launch=unexpected_launch)
     assert code == 0 and "confirm=true" in text
 
 
@@ -767,3 +772,26 @@ def _POLICY():
     from ctx.config import OrchestratePolicy
 
     return OrchestratePolicy()
+
+
+def test_gemini_4_sdk_route_pin_reaches_worker_argv(state_home, git_workspace, monkeypatch):
+    from subprocess import CompletedProcess
+
+    ws = make_ws(git_workspace)
+    model = "gemini-4-carbon"
+    plan = build_route_plan("Review parser", {"nodes": [{
+        "id": "review", "goal": "Review parser", "role": "review",
+        "min_tier": "frontier", "host": "antigravity-sdk", "model": model,
+    }]}, _hosts("ctx-agy", "codex"), ws.config.orchestrate)
+    commands = []
+
+    def run(argv, **kwargs):
+        commands.append(argv)
+        return CompletedProcess(argv, 0, 'Review complete.\n{"input_tokens": 9, "output_tokens": 2}', "")
+
+    monkeypatch.setattr("ctx.orchestrator._run_bounded", run)
+    result = run_route(ws, plan, ws.config.orchestrate)
+    assert result.outcomes[0].status == "ok"
+    assert len(commands) == 1
+    assert commands[0][0] == "/usr/bin/ctx-agy"
+    assert commands[0][commands[0].index("--model") + 1] == model

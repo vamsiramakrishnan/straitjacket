@@ -138,6 +138,7 @@ def test_both_hosts_are_offered_by_the_cli(name):
 
 def test_managed_launcher_loads_only_ctx_into_an_isolated_interpreter(tmp_path, monkeypatch):
     """A parent site-packages entry would defeat provider dependency isolation."""
+    from pathlib import Path
     import subprocess
     import sys
     import venv
@@ -148,9 +149,13 @@ def test_managed_launcher_loads_only_ctx_into_an_isolated_interpreter(tmp_path, 
     py = isolated / "bin" / "python"
     monkeypatch.setenv("CTX_STATE_HOME", str(tmp_path / "state"))
     monkeypatch.setattr(agysdk, "venv_python", lambda: py)
+    caller_packages = tmp_path / "caller-packages"
+    caller_packages.mkdir()
+    monkeypatch.setenv("PYTHONPATH", str(caller_packages))
     probe = tmp_path / "probe.py"
     probe.write_text("import asyncio,sys; from pathlib import Path; from ctx.sdk import ToolSession; "
-                     "assert not any('straitjacket/src' in p for p in sys.path); "
+                     f"assert {str(caller_packages)!r} not in sys.path; "
+                     f"assert {str(Path(agysdk.__file__).resolve().parents[1])!r} not in sys.path; "
                      "root=Path(sys.argv[1]); session=ToolSession(root); "
                      "result=asyncio.run(session.run([sys.executable,'-c','print(42)'])); "
                      "assert result.stdout=='42\\n'; print('isolated OK')")

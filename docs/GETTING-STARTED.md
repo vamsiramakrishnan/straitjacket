@@ -1,18 +1,9 @@
 # Getting started
 
-**Straitjacket is a context and evidence sidecar for coding agents.** It adds
-bounded tool output and retrievable evidence to an existing coding harness.
-
-Keep using Claude Code, Codex, Antigravity, or your preferred coding agent.
-Straitjacket runs alongside it. Your agent still handles the conversation,
-model selection, authentication, and permissions; `ctx` handles captured
-evidence and the optional verified edit workflow. Host hooks are optional for
-direct `ctx` commands, and their capabilities differ by integration.
-
-[Documentation](README.md) · [How it works](HOW-IT-WORKS.md) · [Troubleshooting](TROUBLESHOOTING.md)
-
-Install Straitjacket, capture one command, and retrieve its evidence. Configure
-a coding-agent host after the terminal workflow works.
+Install `ctx`, run a command in your repository, and open the evidence it
+returns. You can do this from a terminal before connecting a coding agent.
+For cross-harness work, see [ACP setup](ACP.md) and [worker routing](ROUTING.md).
+For Gemini 4 model selection, see [native Antigravity sessions](NATIVE-AGY-SESSIONS.md).
 
 ## Requirements
 
@@ -74,7 +65,7 @@ pytest
 ctx run -- pytest -q
 ```
 
-Small output may pass through unchanged. Large output becomes a digest:
+For a large test result, the digest identifies failures and provides a retrieval address. An example:
 
 ```text
 [ctx run:ba3d1020ee8f profile=pytest/v2]
@@ -87,7 +78,7 @@ next:
   ctx get run:ba3d1020ee8f#stdout --lines 140:220
 ```
 
-The handle names the complete stored artifact. The digest names what it omitted and how to retrieve it.
+The handle in this example represents a run in your local store. Use the ID from your own run. The digest identifies omitted regions and gives retrieval instructions. When a stream crosses the capture limit, the result also identifies the discarded middle.
 
 ## Retrieve and search
 

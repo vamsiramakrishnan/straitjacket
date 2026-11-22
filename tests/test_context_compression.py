@@ -1,3 +1,4 @@
+import hashlib
 import json
 
 from ctx.context_compression import compress_context, compress_stored, cache_wrap
@@ -29,6 +30,39 @@ def test_cache_prefix_is_independent_of_dynamic_query():
     assert a['prefix_sha256'] == b['prefix_sha256']
     assert a['suffix'] != b['suffix']
     assert json.loads(a['suffix'])['query'] == 'first query'
+
+
+def test_cli_hashes_the_visible_prefix_and_wraps_visible_evidence(state_home, workspace_dir, capsys):
+    from ctx.cli import main
+
+    secret = "AKIAIOSFODNN7EXAMPLE"  # published AWS example key
+    reference = workspace_dir / "reference.txt"
+    reference.write_text(f'Référence "{secret}"\n', encoding="utf-8")
+    evidence = workspace_dir / "evidence.txt"
+    evidence.write_text(f"label=\x1b[31mred\x1b[0m\nkey={secret}\n", encoding="utf-8")
+
+    prefixes = []
+    suffixes = []
+    for topic in ("label", "key"):
+        assert main(["--workspace", str(workspace_dir), "compress", str(evidence),
+                     "--query", f"{topic}: {secret}", "--cache-prefix", str(reference)]) == 0
+        raw = capsys.readouterr().out
+        assert secret not in raw
+        result = json.loads(raw)
+        wrap = result["cache_wrap"]
+        prefix = json.loads(wrap["prefix"])
+        suffix = json.loads(wrap["suffix"])
+        assert "Référence" in prefix["reference_context"]
+        assert "[ctx:redacted:aws-access-key:" in prefix["reference_context"]
+        assert suffix["query"].startswith(f"{topic}: [ctx:redacted:aws-access-key:")
+        assert suffix["evidence"] == result["text"]
+        assert "label=red" in suffix["evidence"]
+        assert wrap["prompt"] == wrap["prefix"] + wrap["suffix"]
+        assert wrap["prefix_sha256"] == hashlib.sha256(wrap["prefix"].encode()).hexdigest()
+        prefixes.append(wrap["prefix"])
+        suffixes.append(wrap["suffix"])
+    assert prefixes[0] == prefixes[1]
+    assert suffixes[0] != suffixes[1]
 
 
 def test_original_round_trip_is_exact(state_home, workspace_dir):

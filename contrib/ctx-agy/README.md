@@ -1,28 +1,17 @@
-# `ctx agy` — a headless, harnessed Antigravity CLI
+# Antigravity SDK worker
 
 A shim over the **`google-antigravity` Agent SDK**. Its asynchronous tools use
 the provider-independent [Tool SDK](../../docs/TOOL-SDK.md), including typed
 command status, bounded retrieval, cancellation and capsule export.
 
-## Why
+## Choose a worker
 
-| | official `agy` | this shim |
-|---|---|---|
-| headless auth | ✗ interactive OAuth only; ignores `GEMINI_API_KEY` | ✓ `GEMINI_API_KEY` |
-| birth gate | deny-only (no `updatedInput` in the hook schema) | ✓ contained *inside* the tool |
-| output-side gate | ✗ impossible — PostToolUse's only legal output is `{}` | ✓ output is born bounded |
-
-Both `agy` limitations are structural, not oversights: see
-[ADR 005](../../spec/adr/005-antigravity-hook-contract.md) and the
-[published hook contract](https://antigravity.google/docs/hooks). No hook can
-substitute a tool result on that host, so no amount of hook wiring produces an
-output-side safety net.
-
-The SDK's own hooks do not solve it either — `PostToolCallHook` is an
-`InspectHook`, so like the published contract it observes and cannot replace.
-What the SDK *does* give an embedder is **ownership of the tools**. That moves
-containment from "fix the result afterwards" (impossible here) to "the result
-was never unbounded" — which needs no substitution API at all.
+Use native `agy` for interactive work or a resumable CLI conversation. It
+can rewrite selected tool inputs. Its post-tool hook leaves output in the
+transcript. The SDK worker owns its command tools and bounds their results
+before returning them to the model. It authenticates with `GEMINI_API_KEY`.
+See [Gemini model selection](../../docs/NATIVE-AGY-SESSIONS.md#choose-a-gemini-model)
+for Hydrogen, Neon, Carbon and Argon.
 
 ## What it replaces
 
@@ -76,18 +65,9 @@ Fixture: a failing test whose cause is one anomalous line in a 4,000-line log
 | `--no-contain` (native builtins) | 130,246 | ✓ |
 | contained (ctx-backed tools) | 107,900 | ✓ |
 
-**17% fewer input tokens, n=1.** That is a modest delta and it should not be
-quoted as the headline: 3.6 Flash is already flood-disciplined on this scenario
-(it greps rather than dumps — see the
-[tier receipt](../../evals/antigravity-3.6-flash-vs-3.5-flash-lite-2026-07-25.md)),
-and the SDK's native `RUN_COMMAND` appears to bound its own output somewhat. The
-containment gap widens on weaker models and on genuinely unavoidable floods; it
-is near zero on a model that already knows not to paste the log.
-
-The durable result is not the 17%. It is that this makes Antigravity
-**harnessable and scriptable at all** — an orchestrator node, a CI job, or a
-cron trigger can drive it, which OAuth-only `agy` forbids — and that it is the
-only configuration in which that host has an output-side gate.
+This run used 17% fewer input tokens. Both arms answered correctly. The sample
+contains one task on Gemini 3.6 Flash. The [tier comparison](../../evals/antigravity-3.6-flash-vs-3.5-flash-lite-2026-07-25.md)
+shows how often the agent searched the log in that experiment.
 
 ## Managed install
 

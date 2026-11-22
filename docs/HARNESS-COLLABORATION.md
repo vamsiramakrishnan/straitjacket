@@ -1,157 +1,65 @@
-# Harness collaboration: where straitjacket stands, and what is missing
+# Delegate work across coding harnesses
 
-straitjacket's premise is that you keep your coding agent. That makes the
-harness boundary the most important interface in the project, and it is worth
-being precise about what that boundary can and cannot carry today.
+Use `ctx orchestrate` when one harness should find the evidence, another should
+make the change, and a verifier should check the result. Each worker keeps its
+own model, credentials and tools. Straitjacket assigns the work, saves results
+in the workspace and gives each dependent worker a bounded handoff with
+`checkpoint:` addresses. Workers can finish at different times and use different
+harnesses.
 
-This document is the audit and the ranked backlog. Two items on it have landed
-(§1, and §5 on the one transport where it is honest); the rest are stated as
-gaps with the mechanism each would need, so that nothing here reads as a
-capability that exists.
+## Try a two-stage handoff
 
-## What exists today
+From a Git checkout of this project, with at least one unattended host
+configured, preview a small edit:
 
-Six distinct integration mechanisms, and they are not interchangeable.
+```sh
+ctx orchestrate 'Fix a typo in README.md' --dry-run
+```
 
-| mechanism | hosts | what it can do |
+The deterministic plan has an `implement` node followed by `verify`. Read
+the selected host, model, tier and estimated cost for each node. A single
+installed harness can handle both nodes. Configuring a second host gives the
+router more choices. To execute, replace the example with an actual task and
+its acceptance check, then omit `--dry-run`. Execution can invoke paid models.
+
+| What the worker needs | How it gets there |
+|---|---|
+| A defined job | The orchestrator passes the overall task, this node's goal and any declared target paths. |
+| Evidence from a predecessor | The worker receives a bounded handoff and resolves cited regions with `ctx get`. The store keeps the captured log up to the configured limit. |
+| A specific finding for a later node | From the same workspace, use `ctx task send TASK_ID NODE_ID repo:README.md --note "Check the installation example"`. Use the task and node IDs from your run. |
+| An update for a peer harness | `ctx relay signal codex repo:README.md --origin claude --note "See the installation example"` queues an advisory. Delivery depends on the receiving host. |
+| Work after an interruption | `ctx task show TASK_ID` shows attempts and handoffs. `ctx orchestrate --resume TASK_ID` restores completed nodes and retries unfinished work. |
+
+## Give a worker a task that needs a skill
+
+A route node declares a role such as `implement` and capability tags such as
+`edit` and `code`. Straitjacket uses these tags to select a worker. The
+[coordinator skill reference](../plugins/antigravity/skills/ctx-harness/references/harness-collaboration.md)
+shows the JSON it expects. When the job needs a specific installed skill, name
+the skill in the node's goal and choose a harness that provides it. That harness
+controls skill discovery and invocation. ACP passes the task and its tools.
+Use the [capability inventory](CAPABILITY-SURFACE.md) to inspect the skills a
+workspace exposes.
+
+For a single Claude Code investigation, `ctx setup --host claude` installs the
+`ctx-explorer` subagent when the project has no local override. Ask Claude to
+delegate a concrete question, such as “Use ctx-explorer to find where ACP
+denies a permission request. Return the file, test and evidence addresses.”
+The explorer reports findings, negative searches and open questions. The
+parent can inspect a cited location before deciding to edit.
+[Explorer contract](../plugins/antigravity/agents/ctx-explorer.md).
+
+## Choose the collaboration mechanism
+
+| Mechanism | Use it for | Delivery |
 |---|---|---|
-| Hook interception | claude, codex, antigravity, hermes, omp, opencode, dsh | deny / rewrite a tool call; substitute a tool result (not on antigravity, which cannot replace a result) |
-| MCP server | hermes, omp, opencode, dsh (+ any MCP client) | bounded retrieval and edit tools |
-| CLI wrapper | claude, codex, antigravity, … | ephemeral per-session config, then hand back |
-| ACP worker | all seven | ctx-owned subprocess with a model endpoint |
-| Observer proxy | claude | byte-exact traffic relay; window/usage ground truth |
-| SDK agent | antigravity-sdk | containment inside the tool implementations |
+| [Routing](ROUTING.md) | Split one task into dependent jobs or parallel independent jobs | The scheduler launches eligible workers when their dependencies finish. |
+| [Agent Client Protocol](ACP.md) | Start an installed harness as a worker over stdio | A fresh ACP session gets the selected model, task and workspace-scoped `ctx` and `ctx_edit` MCP tools. |
+| [Task ledger](TASK-LEDGER.md) | Transfer a finding to a named task node or recover a run | The next attempt reads its inbox. Completed nodes keep their checkpoints. |
+| [Relay](RELAY.md) | Notify a peer on the same workspace, including a running worker | An ACP advisory arrives before the next prompt. An ACP interrupt can cancel the current turn. A hooked host handles an interrupt at a tool-call boundary. |
 
-And one shared record: the **task ledger**
-([TASK-LEDGER.md](TASK-LEDGER.md)), an append-only JSONL of typed rows per
-task. Its design statement is the important part — *"harnesses never address
-each other; they append to the ledger and read from it"* — and the reason it
-works is that nobody has to be listening.
-
-That is also its limit.
-
-## The shape of the problem
-
-Every ctx→harness data flow in the system is a **return value on a call the
-harness made**. A hook subprocess answers the hook. An MCP tool call answers
-the tool call. `ctx get` answers the command. There is no path by which ctx
-initiates anything.
-
-The capability matrix is also asymmetric in a way the *agent* cannot see.
-Antigravity's PostToolUse contract has exactly one legal output, so containment
-there happens at PreToolUse or not at all. Codex has no "ask", so an ask
-degrades to a deny. ctx knows all of this — `HostSpec.input_substitution` and
-`output_substitution` are declared per host — and the model running inside that
-host knows none of it.
-
-## 1. No way to tell another harness anything — **landed**
-
-The gap: a finished background job was invisible until somebody polled. Two
-harnesses on one workspace could not exchange a finding. Nothing could stop an
-agent walking into a wall a peer had already hit.
-
-The fix is `ctx relay` ([RELAY.md](RELAY.md)): a workspace-scoped append-only
-queue with subscriptions, signals and delivery receipts, drained at the hook
-boundaries that already exist. Three things make it fit rather than bolt on:
-
-- **It reuses the ledger's address rule.** A signal carries a ref and a bounded
-  note, never content. The same closed grammar, so the two buses cannot drift
-  into accepting different things.
-- **It states its latency instead of hiding it.** On a hooked host, delivery is
-  at the next hook boundary and an interrupt stops the next *tool call*, not a
-  token stream. There is no push, and `stream_rules.py` already said so — a
-  feature that quietly contradicted it would have been worse than no feature.
-  The one exception is an ACP worker, whose subprocess ctx owns; §5.
-- **The subscriber picks the kind.** One job completion is an advisory report
-  to one harness and a hard stop to another, decided by each of them.
-
-Landed with it: background jobs announce themselves when somebody is watching,
-and an expensive capture publishes its `run:` address on the `digest` topic —
-the store was always shared, what was missing is that the peer knew.
-
-## 2. The agent cannot see its own host's limits — **gap**
-
-An agent on Antigravity should behave differently from one on Claude Code: its
-tool results are never substituted, so volume discipline has to be voluntary.
-Today nothing tells it. The `DIALECT_CAPS` table in `hook.py` and the
-`HostSpec` flags in `hosts.py` are read by ctx and never surfaced to the model.
-
-The mechanism already exists: SessionStart returns
-`additionalContext` on Claude Code and Codex; on Antigravity the hook returns
-`injectSteps` instead. A three-line capability statement there — what this host
-can substitute, what it cannot, and what that means for how much output to
-produce — costs a handful of tokens once per session and is strictly better
-than the agent guessing. This is the cheapest remaining item on the list.
-
-## 3. No presence: nobody knows who else is live — **gap**
-
-`ctx relay` introduces `<host>:<session>` as an address, which is the first
-half. The second half is a registry: which harnesses are *currently* active on
-this workspace, last seen when. A `ctx.presence/v1` row written at each
-session-start drain would let `ctx relay status` show live peers rather than
-just queued signals, and would let `ctx orchestrate` route a node to a harness
-that is already running instead of spawning a fresh one.
-
-The cost of not having it: an interrupt addressed to a host that went away sits
-in the queue until its TTL, and `orchestrate` pays cold-start on every node.
-
-## 4. ACP sessions are single-shot — **gap, and the structural one**
-
-`docs/ACP.md` is explicit: *"Each ACP attempt creates a fresh session"*, and
-session reload/resume are not implemented in the transport. Every attempt
-re-establishes context from checkpoints.
-
-This is the deepest limit on genuine multi-harness collaboration, because it
-means a peer harness cannot be *kept warm*. The relay now reaches into a
-running ACP worker — its prompt carries queued reports and a queued interrupt
-stops its turn — but every attempt still starts from nothing. ACP resume is
-what would make a follow-up possible. The two compose: a resumable worker that
-drains the relay each turn is a peer you can hold a conversation with, and
-neither half is sufficient alone.
-
-## 5. Mid-turn interruption, where the stream is ours — **landed for ACP**
-
-`stream_rules.py` is the transport-neutral state machine for callers that own
-their stream, and it is honest that hook hosts are not among them. ACP workers
-*are*: ctx spawns the subprocess, polls a cancellation source on every wait
-iteration, and already sends `session/cancel` on teardown.
-
-That is now wired. A queued interrupt becomes the cancellation source for an
-ACP worker, so the turn is cut off while it is running rather than at the next
-tool call, and the failure names the peer and the address. Queued reports reach
-the same worker through its prompt, since it has no `additionalContext`
-channel. Both are opt-in per worker: the semantic analysis worker stays
-unreachable by design, running with no tools over frozen evidence.
-
-The queue did not change; only the drain point did, which is what the design
-predicted. What remains is the SDK-backed runner, which owns its stream for the
-same reason and is not yet wired.
-
-## 6. No back-pressure between peers — **gap**
-
-`ctx proxy` measures real window pressure, and `proxywindow.json` holds it. A
-peer harness approaching its context limit is exactly the sort of thing another
-harness should know before handing it more work — and exactly the sort of thing
-the relay's `advise` kind is shaped for. What is missing is the producer: a
-threshold crossing in the proxy that publishes on a `pressure` topic.
-
-This is the one item that would benefit from a topic the relay does not yet
-have, so it is also the one that would tell us whether the topic vocabulary is
-right.
-
-## Ranked
-
-| # | item | status | cost | why it ranks here |
-|---|---|---|---|---|
-| 1 | cross-harness relay | **landed** | — | unblocks 2, 5, 6 |
-| 2 | host capability statement | gap | hours | cheapest; the agent is guessing today |
-| 3 | presence registry | gap | days | makes the relay's addressing complete |
-| 6 | pressure back-pressure | gap | days | first real test of the topic vocabulary |
-| 5 | mid-turn drain for owned streams | **ACP landed** | — | honest only on owned hosts; SDK runner remains |
-| 4 | ACP session resume | gap | weeks | the structural one; unblocks warm peers |
-
-The ordering is deliberate: the two cheap items (2, 3) both make the landed
-mechanism more useful without changing it. Item 5 has now earned the stronger
-claim on exactly the transport where it is true — an ACP worker really is
-stopped mid-turn — and item 4 remains the structural one, because being able
-to interrupt a worker is not the same as being able to keep one warm.
+Task resume restores workflow state. Each ACP attempt still opens a fresh
+agent session. Worker addresses do not indicate presence, and a queued signal
+can expire before the recipient reads it. Native interception also varies by
+host. See the [host capability table](HOST-CAPABILITIES.md) before depending on
+a hook to deliver an advisory or replace output.

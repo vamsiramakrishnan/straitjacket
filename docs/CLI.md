@@ -38,8 +38,9 @@ different safety contracts. The mental model can stay small.
 | Need | Command | Why |
 |---|---|---|
 | A map of the repo | `ctx map --budget N` | Ranked, token-budgeted file/symbol map instead of a directory dump |
-| Exact answers from def/refs | `ctx index` | Build a compiler-grade SCIP index once; def/refs stop approximating |
-| Where a symbol lives | `ctx def <symbol>` | Definition site as a snapshot + span |
+| Compiler-backed reference sites | `ctx index` | Build a SCIP index with the language indexer. Results disclose the engine and any textual fallback for changed files. |
+| Which file defines a name | `ctx search repo: sym:NAME` | Definition sites from the symbol table |
+| The definition in a known file | `ctx def repo:PATH:NAME` | Definition range, captured snapshot and anchored address for the current source |
 | Who uses a symbol | `ctx refs <symbol>` | Reference sites, bounded |
 | Who calls / what it calls | `ctx callers <symbol>` / `ctx callees <symbol>` | Call graph, one query instead of a recursive grep |
 | Blast radius of a change | `ctx impact <symbol> --depth N` | Transitive callers (`--depth ≤ 6`) |

@@ -7,6 +7,8 @@ shipped price table.
 
 from __future__ import annotations
 
+import pytest
+
 from ctx import hosts
 
 
@@ -150,3 +152,40 @@ def test_pick_coordinator_is_cheapest_planner():
     assert coord.name == "antigravity"
     assert coord.spec.coord_model == "gemini-3.5-flash-lite"
     assert coord.coordinator_price().output < coord.price.output
+
+
+@pytest.mark.parametrize("model", [
+    "gemini-4-hydrogen", "gemini-4-neon", "gemini-4-carbon", "gemini-4-argon",
+])
+def test_gemini_4_pin_is_available_without_changing_default_routing(model):
+    for host in ("antigravity", "antigravity-sdk"):
+        spec = hosts.host_by_name(host)
+        assert spec.model(model).launch_id == model
+        installed = _which_of(*spec.cli_bins)
+        ordinary = hosts.detect(spec, which=installed, env={})
+        assert model not in {m.id for m in ordinary.models}
+        selected = hosts.detect(spec, which=installed, env={"ANTIGRAVITY_MODEL": model})
+        assert model in {m.id for m in selected.models}
+        assert selected.price.vendor == "google"
+        assert selected.model_price(model + "-high") == selected.price
+
+
+@pytest.mark.parametrize("model", [
+    "gemini-4-hydrogen-high", "gemini-4-neon-xhigh", "gemini-4-carbon", "gemini-4-argon-high",
+])
+def test_native_launcher_preserves_gemini_4_model_and_effort(monkeypatch, tmp_path, model):
+    from subprocess import CompletedProcess
+    from ctx import orchestrator
+
+    spec = hosts.host_by_name("antigravity")
+    host = hosts.detect(spec, which=_which_of("agy"), env={})
+    commands = []
+
+    def run(argv, **kwargs):
+        commands.append(argv)
+        return CompletedProcess(argv, 0, "done", "")
+
+    monkeypatch.setattr(orchestrator, "_run_bounded", run)
+    code, *_ = orchestrator._launch_host(host, tmp_path, "review", "ctx", model=model, timeout=5)
+    assert code == 0
+    assert commands == [[host.path, "--model", model, "-p", "review"]]
