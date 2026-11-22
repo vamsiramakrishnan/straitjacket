@@ -85,7 +85,8 @@
 }
 
 .sj-command { color: var(--sl-color-white); }
-.sj-command span, .sj-output { color: var(--sl-color-gray-2); }
+.sj-command [aria-hidden], .sj-output { color: var(--sl-color-gray-2); }
+.sj-option { white-space: nowrap; }
 .sj-step samp { margin-block-start: 0.45rem; }
 .sj-line { color: var(--sl-color-gray-2); }
 .sj-line b, .sj-line mark { background: transparent; color: var(--sl-color-accent-high); }
