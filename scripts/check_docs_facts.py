@@ -11,6 +11,7 @@ Authoritative sources:
   - ctx ask intents   -> src/ctx/ask.py  INTENTS dict (counted via AST)
   - test total        -> tests/**/*.py   test functions (counted via AST)
   - evaluation claims -> committed JSON records plus deterministic replays
+  - the film's figures -> site/film/tools/check_film.py (its data rebuilt from the same records)
 
 The test total was named above as one of the three drifting facts but was
 never actually asserted, so it drifted furthest: the README said 1,159 while
@@ -28,6 +29,7 @@ import hashlib
 import json
 import os
 import re
+import subprocess
 import sys
 import tempfile
 import tomllib
@@ -119,6 +121,22 @@ def _stated_test_counts(text: str) -> list[tuple[str, str]]:
     can honour — see the note in main() on why the bare noun is rejected.
     """
     return _TEST_CLAIM.findall(text)
+
+
+def film_failures(root: Path) -> list[str]:
+    """Return what the scroll film's own checker reports as failed.
+
+    The film (site/film) restates receipt values on a page of its own. Its checker rebuilds the film's data from the
+    committed records and compares every marked number and the printed digest, so this guard only runs it.
+    """
+    checker = root / "site" / "film" / "tools" / "check_film.py"
+    if not checker.is_file():
+        return []
+    done = subprocess.run([sys.executable, str(checker)], capture_output=True, text=True, cwd=root)
+    if done.returncode == 0:
+        return []
+    found = [line[5:] for line in done.stdout.splitlines() if line.startswith("FAIL ")]
+    return [f"site/film: {line}" for line in found] or [f"site/film: check_film.py failed: {done.stderr.strip()[-300:]}"]
 
 
 def main() -> int:
@@ -358,6 +376,8 @@ def main() -> int:
                 f"{rel}: anchor-drift summary must state the record-derived "
                 "zero wrong-content result."
             )
+
+    failures.extend(film_failures(root))
 
     if failures:
         print("Documentation fact-check failures:", file=sys.stderr)

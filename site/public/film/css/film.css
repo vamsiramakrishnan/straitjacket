@@ -1,0 +1,18 @@
+/* Placeholder styles (replaced by the page helper's film.css): tokens and just enough layout to scroll the film. */
+:root { color-scheme: dark; --bg:#0D0F12; --surface:#15181D; --surface2:#1C2026; --ink:#ECEAE3; --muted:#8D939A; --faint:#7D848D; --grid:#272C33; --blue:#6F96FF; --blue2:#263A68; --amber:#F0B429; --amber2:#58451D; --red:#FF7768; --red2:#542925; --green:#63D3A4; }
+@media (prefers-color-scheme: light) { :root:not([data-theme="dark"]) { color-scheme: light; --bg:#F4F1E8; --surface:#FCFAF4; --surface2:#EAE6DB; --ink:#16181D; --muted:#62686C; --faint:#5F6461; --grid:#D8D4C9; --blue:#174EB8; --blue2:#DCE6FF; --amber:#7A5200; --amber2:#F4E4B9; --red:#A82C20; --red2:#F4D3CC; --green:#0D6B49; } }
+:root[data-theme="light"] { color-scheme: light; --bg:#F4F1E8; --surface:#FCFAF4; --surface2:#EAE6DB; --ink:#16181D; --muted:#62686C; --faint:#5F6461; --grid:#D8D4C9; --blue:#174EB8; --blue2:#DCE6FF; --amber:#7A5200; --amber2:#F4E4B9; --red:#A82C20; --red2:#F4D3CC; --green:#0D6B49; }
+body { background: var(--bg); color: var(--ink); font-family: 'Space Grotesk', system-ui, sans-serif; }
+#stage { position: fixed; inset: 0; width: 100%; height: 100%; display: block; }
+#labels { position: fixed; inset: 0; pointer-events: none; overflow: hidden; }
+.lbl { position: absolute; left: 0; top: 0; font: 500 11px 'JetBrains Mono', ui-monospace, monospace; color: var(--muted); white-space: nowrap; }
+.bar, .hud, .rail { position: fixed; z-index: 3; }
+.bar { top: 0; left: 16px; } .hud { right: 16px; bottom: 16px; font-family: 'JetBrains Mono', ui-monospace, monospace; } .rail { display: none; }
+.mark__ink { fill: var(--ink); } .mark__strap { stroke: #F0B429; stroke-width: 7; fill: none; }
+main { position: relative; z-index: 2; }
+.ch { min-height: 170vh; padding: 0 max(16px, env(safe-area-inset-right, 0px)) 0 max(16px, env(safe-area-inset-left, 0px)); }
+.ch--hero { min-height: 100vh; } .ch--doc { min-height: 100vh; }
+.panel { position: sticky; top: 22vh; max-width: 30rem; background: var(--surface); border: 1px solid var(--grid); padding: 20px; }
+.fallback { display: none; }
+.specimen { font: 12px 'JetBrains Mono', ui-monospace, monospace; overflow-x: auto; background: var(--surface2); padding: 12px; }
+a { color: var(--blue); }
