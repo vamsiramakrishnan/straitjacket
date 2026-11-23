@@ -29,6 +29,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
+import os
 import pathlib
 import random
 import statistics
@@ -42,12 +43,7 @@ from typing import Callable
 _HERE = pathlib.Path(__file__).resolve().parent
 sys.path.insert(0, str(_HERE))
 
-# Reuse the proven single-task machinery + SDK symbols verbatim.
-import antigravity_sdk_eval as base  # noqa: E402
-from antigravity_sdk_eval import (  # noqa: E402
-    Agent, BuiltinTools, CapabilitiesConfig, LocalAgentConfig, Meter,
-    SYSTEM, hooks, make_tools, os, policy,
-)
+# Fixture construction is model-free; load the optional SDK only for live runs.
 
 MODEL_DEFAULT = "gemini-3.5-flash"
 WALL_TIMEOUT = 240.0
@@ -214,6 +210,11 @@ BY_NAME = {t.name: t for t in REGISTRY}
 
 # ---------------------------------------------------------------- runner
 async def run_task_arm(task: Task, root: pathlib.Path, arm: str, model: str) -> dict:
+    from antigravity_sdk_eval import (
+        Agent, BuiltinTools, CapabilitiesConfig, LocalAgentConfig, Meter,
+        SYSTEM, make_tools, policy,
+    )
+
     meter = Meter()
     root = root.resolve()
     cfg = LocalAgentConfig(

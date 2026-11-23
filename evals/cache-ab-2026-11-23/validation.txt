@@ -1,0 +1,6 @@
+Command: python -m pytest tests/test_cache_ab.py tests/test_cache_ab_accounting.py tests/test_cache_ab_review.py tests/test_cache_ab_tasks.py tests/test_cache_ab_tools.py tests/test_cache_ab_offline.py tests/test_cache_ab_replay.py tests/test_context_compression.py tests/test_prefix_stability.py tests/test_usage.py tests/test_seq_and_bench.py -q -o addopts=
+
+........................................................................ [ 44%]
+........................................................................ [ 89%]
+.................                                                        [100%]
+161 passed in 18.05s
