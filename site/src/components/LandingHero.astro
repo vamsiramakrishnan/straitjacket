@@ -10,7 +10,7 @@ const { title, tagline, actions } = entry.data.hero ?? {};
     <div class="sj-intro-copy">
       <h1 id="_top" data-page-title>{title}</h1>
       <p>{tagline}</p>
-      {actions?.map(({ link, text }) => <a class="sj-start" href={link}>{text}</a>)}
+      {actions?.map(({ link, text, variant }) => <a class={variant === 'minimal' ? 'sj-text-link sj-more' : 'sj-start'} href={link}>{text}</a>)}
     </div>
     <figure class="sj-trace" id="capture-a-failure">
       <figcaption>Capture and retrieve</figcaption>

@@ -51,6 +51,9 @@
   text-decoration: none;
 }
 
+/* A second, quieter action beside the button (the film). */
+.sj-more { margin-inline-start: 1.25rem; }
+
 /* A readable excerpt of a real capture, including its address in the store. */
 .sj-trace {
   min-inline-size: 0;
