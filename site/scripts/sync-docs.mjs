@@ -5,7 +5,7 @@
 //   2. adds Starlight frontmatter (title + description);
 //   3. rewrites inter-doc links so they resolve on the published site:
 //        - a link to another synced doc  (FOO.md)      -> its site slug
-//        - a link to the docs index      (README.md)   -> the site home
+//        - a link to the docs index      (README.md)   -> the docs landing page (/docs/)
 //        - a link that escapes docs/      (../evals/…)  -> a GitHub URL
 //      (absolute URLs, in-page anchors, and asset links are left untouched;
 //       SVG embeds already use absolute raw.githubusercontent URLs; agent marks
@@ -99,8 +99,8 @@ function rewriteTarget(value) {
   const path = hashIdx === -1 ? v : v.slice(0, hashIdx);
   const frag = hashIdx === -1 ? '' : v.slice(hashIdx);
 
-  // The docs index -> site home.
-  if (path === 'README.md') return `${BASE}/${frag}`;
+  // The docs index -> the docs landing page. The site's home page is the 3D front page in public/index.html.
+  if (path === 'README.md') return `${BASE}/docs/${frag}`;
 
   // A sibling doc that we sync -> its slug.
   if (SLUG_BY_FILE.has(path)) return `${SLUG_BY_FILE.get(path)}${frag}`;

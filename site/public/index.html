@@ -1,0 +1,391 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Straitjacket — Addressable Evidence for Coding Agents</title>
+  <meta name="description" content="Visualize how Straitjacket (ctx-harness v0.5.0) separates complete evidence from bounded context, verifies edits with content anchors, and orchestrates seven coding harnesses over ACP." />
+  <link rel="icon" type="image/svg+xml" href="./icons/favicon.svg" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&family=Space+Grotesk:wght@400;500;600;700&display=swap" rel="stylesheet" />
+  <script type="module" crossorigin src="./assets/index-CMQ6xeKk.js"></script>
+  <link rel="modulepreload" crossorigin href="./assets/motion-C8brRDp_.js">
+  <link rel="modulepreload" crossorigin href="./assets/three-nVYVQ0G6.js">
+  <link rel="stylesheet" crossorigin href="./assets/index-BdkJy4pK.css">
+</head>
+<body>
+  <!-- Fixed full-viewport Three.js WebGL stage -->
+  <canvas id="stage" aria-label="Interactive 3D visualization of Straitjacket containment chamber, anchor caliper, and ACP harness router"></canvas>
+  <div id="webgl-fallback" class="webgl-fallback" hidden></div>
+
+  <!-- Top architectural instrument HUD -->
+  <header class="hud-header" role="banner">
+    <a href="#hero" class="brand" data-jump="#hero">
+      <img src="./icons/icon.svg" alt="" width="24" height="24" class="brand-icon" />
+      <span class="brand-word">STRAITJACKET</span>
+      <span class="brand-ver">ctx-harness v0.5.0</span>
+    </a>
+
+    <nav class="hud-nav" aria-label="Evidence path chapters">
+      <a href="#fates" data-jump="#fates" data-chapter="1">01 Fates</a>
+      <a href="#gates" data-jump="#gates" data-chapter="2">02 Gates</a>
+      <a href="#anchors" data-jump="#anchors" data-chapter="3">03 Anchors</a>
+      <a href="#routing" data-jump="#routing" data-chapter="4">04 ACP</a>
+      <a href="#receipts" data-jump="#receipts" data-chapter="5">05 Receipts</a>
+    </nav>
+
+    <div class="hud-telemetry">
+      <div class="telemetry-cell">
+        <span class="tel-label">CONTEXT</span>
+        <span class="tel-value" id="hud-tokens">531 tok</span>
+      </div>
+      <div class="telemetry-cell telemetry-models">
+        <span class="tel-dot" id="hud-model-dot"></span>
+        <span class="tel-value" id="hud-models">LOADING 3D</span>
+      </div>
+      <a href="#quickstart" data-jump="#quickstart" class="hud-cta">Try ctx</a>
+    </div>
+  </header>
+
+  <!-- Right-edge scroll depth rail -->
+  <aside class="scroll-rail" aria-label="Scroll progress">
+    <div class="rail-track">
+      <div class="rail-fill" id="rail-fill"></div>
+    </div>
+    <ol class="rail-stops">
+      <li><button type="button" data-jump="#hero" data-chapter="0" class="rail-btn is-active" aria-label="Overview">00</button></li>
+      <li><button type="button" data-jump="#fates" data-chapter="1" class="rail-btn" aria-label="Evidence Fates">01</button></li>
+      <li><button type="button" data-jump="#gates" data-chapter="2" class="rail-btn" aria-label="Four Gates">02</button></li>
+      <li><button type="button" data-jump="#anchors" data-chapter="3" class="rail-btn" aria-label="Content Anchors">03</button></li>
+      <li><button type="button" data-jump="#routing" data-chapter="4" class="rail-btn" aria-label="ACP Routing">04</button></li>
+      <li><button type="button" data-jump="#receipts" data-chapter="5" class="rail-btn" aria-label="Receipts and Quickstart">05</button></li>
+    </ol>
+  </aside>
+
+  <!-- Scroll-driven editorial narrative -->
+  <main id="scroll-root">
+    <!-- CHAPTER 0: HERO -->
+    <section id="hero" class="chapter chapter-hero" data-chapter="0">
+      <div class="panel panel-left hero-panel">
+        <div class="eyebrow">
+          <span class="dot dot-blue"></span>
+          <span>ADDRESSABLE EVIDENCE · PYTHON 3.11+ · APACHE-2.0</span>
+        </div>
+        <h1 class="display-title">
+          COMPLETE EVIDENCE.<br />
+          <span class="accent-blue">BOUNDED CONTEXT.</span>
+        </h1>
+        <p class="lead">
+          Straitjacket helps coding agents find the code they need and hand work to each other without flooding prompts or forwarding conversations. Raw output stays durable on disk; the model receives a deterministic digest and an exact address.
+        </p>
+
+        <div class="equation-bar" aria-label="Core invariant">
+          <code>complete evidence ≠ active context</code>
+          <span class="eq-sep">→</span>
+          <code class="accent-blue">active context + addresses = complete evidence on demand</code>
+        </div>
+
+        <div class="hero-actions">
+          <button type="button" class="btn-primary" data-jump="#fates">Trace the evidence path ↓</button>
+          <button type="button" class="cmd-pill" data-copy="python -m pip install 'ctx-harness==0.5.0'">
+            <span class="cmd-prompt">$</span>
+            <span>pip install 'ctx-harness==0.5.0'</span>
+            <span class="copy-tag">COPY</span>
+          </button>
+        </div>
+
+        <div class="harness-strip" aria-label="Seven supported coding harnesses">
+          <span class="strip-label">WORKS ALONGSIDE 7 HARNESSES</span>
+          <div class="harness-icons" id="hero-harness-icons"></div>
+        </div>
+      </div>
+
+      <div class="scroll-cue" aria-hidden="true">
+        <span>SCROLL TO ENTER GATE 01</span>
+        <div class="scroll-cue-line"></div>
+      </div>
+    </section>
+
+    <!-- CHAPTER 1: EVIDENCE FATES (302,628 -> 531 TOKENS) -->
+    <section id="fates" class="chapter chapter-split" data-chapter="1">
+      <div class="panel panel-right">
+        <div class="eyebrow">
+          <span class="dot dot-red"></span>
+          <span>01 · EVIDENCE FATES · FIELD-NEEDLE FIXTURE</span>
+        </div>
+        <h2 class="chapter-title">CONTAIN THE FLOOD.<br />KEEP THE NEEDLE.</h2>
+        <p class="chapter-copy">
+          Watch the 3D intake chamber process the same measured <strong>20,001-line log</strong> (979.1 KiB, quiet failure at line <code>14,238</code>) under three treatments. Toggle live to drive the particle stream:
+        </p>
+
+        <div class="segmented" id="fates-switcher" role="tablist" aria-label="Evidence treatment mode"></div>
+
+        <div class="instrument-box" id="fates-readout">
+          <div class="stat-row">
+            <div>
+              <span class="stat-label">EMITTED INTO PROMPT</span>
+              <div class="stat-figure" id="fate-tokens">531</div>
+              <span class="stat-unit">o200k_base tokens</span>
+            </div>
+            <div class="stat-right">
+              <span class="badge" id="fate-badge">CONTAINED · ADDRESSABLE</span>
+              <div class="stat-delta" id="fate-reduction">−99.82%</div>
+            </div>
+          </div>
+
+          <div class="meter-track" aria-hidden="true">
+            <div class="meter-fill" id="fate-meter"></div>
+          </div>
+
+          <dl class="receipt-kv">
+            <div>
+              <dt>Quiet needle (L14,238)</dt>
+              <dd id="fate-needle">Preserved (line 14,238)</dd>
+            </div>
+            <div>
+              <dt>Retrieval address</dt>
+              <dd><code id="fate-address">run:8956c843e556#stdout</code></dd>
+            </div>
+          </dl>
+          <p class="box-note" id="fate-summary"></p>
+        </div>
+
+        <div class="residency-strip">
+          <div class="res-header">
+            <span>7-TURN RESIDENCY CONSEQUENCE</span>
+            <span class="mono-dim">evals/field-needle-record.json</span>
+          </div>
+          <div class="res-bars">
+            <div class="res-row">
+              <span class="res-lbl">Native raw</span>
+              <div class="res-bar-wrap"><div class="res-bar res-bar-red" style="width:100%"></div></div>
+              <span class="res-val">1.82M tok resident</span>
+            </div>
+            <div class="res-row">
+              <span class="res-lbl">Straitjacket</span>
+              <div class="res-bar-wrap"><div class="res-bar res-bar-blue" style="width:2.5%"></div></div>
+              <span class="res-val">531 + 21 lines on demand</span>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- CHAPTER 2: THE FOUR GATES & DIGEST ANATOMY -->
+    <section id="gates" class="chapter chapter-split" data-chapter="2">
+      <div class="panel panel-left">
+        <div class="eyebrow">
+          <span class="dot dot-blue"></span>
+          <span>02 · THE FOUR GATES &amp; DIGEST ANATOMY</span>
+        </div>
+        <h2 class="chapter-title">FOUR GATES.<br />ONE ARTIFACT STORE.</h2>
+        <p class="chapter-copy">
+          Every byte passes four verifiable checkpoints inside the containment chamber. Select a gate to illuminate its optical ring on the 3D manifold:
+        </p>
+
+        <div class="gate-grid" id="gate-selector" role="tablist" aria-label="Four containment gates"></div>
+
+        <div class="gate-detail" id="gate-detail">
+          <div class="gate-q" id="gate-question"></div>
+          <p class="gate-desc" id="gate-desc"></p>
+          <button type="button" class="cmd-inline" id="gate-cmd-btn" data-copy="">
+            <span class="cmd-prompt">$</span>
+            <code id="gate-cmd"></code>
+            <span class="copy-tag">COPY</span>
+          </button>
+        </div>
+
+        <div class="specimen-card" aria-label="Annotated digest specimen">
+          <div class="specimen-head">
+            <span>DIGEST SPECIMEN</span>
+            <span class="mono-amber">deterministic · 531 tokens</span>
+          </div>
+          <pre class="specimen-code"><code><span class="tok-amber">[ctx run:8956c843e556 profile=logtemplate/v1]</span>
+<span class="tok-dim">command: cat corpus.log · exit: 0</span>
+<span class="tok-blue">stdout: 20,001 lines · 979.1 KiB · est 250,648 tokens</span>
+<span class="tok-dim">templates: 11 cover 20,001/20,001 lines</span>
+  2,608× L6:  INFO worker-&lt;*&gt; enqueued · span 0f44195122
+<span class="tok-amber">      1× L14238: WARN quiet-needle · span 7b91e04c2a</span>
+<span class="tok-green">coverage: identities 11/11 · unrepresented required: 0</span>
+<span class="tok-blue">next: ctx get run:8956c843e556#stdout --lines 14228:14248</span></code></pre>
+        </div>
+      </div>
+    </section>
+
+    <!-- CHAPTER 3: CONTENT ANCHORS -->
+    <section id="anchors" class="chapter chapter-split" data-chapter="3">
+      <div class="panel panel-left">
+        <div class="eyebrow">
+          <span class="dot dot-green"></span>
+          <span>03 · CONTENT ANCHORS · THE ADDRESS THAT SURVIVES AN EDIT</span>
+        </div>
+        <h2 class="chapter-title">LINE NUMBERS DRIFT.<br /><span class="accent-green">CONTENT ANCHORS LOCK.</span></h2>
+        <p class="chapter-copy">
+          A line number is a position, not an identity. Straitjacket embeds a short content digest inside every <code>repo:</code> selector (<code>--lines 40:52@07407f1c</code>). Simulate an edit to drive the 3D Vernier Anchor Caliper:
+        </p>
+
+        <div class="segmented segmented-4" id="anchor-switcher" role="tablist" aria-label="Edit drift scenario"></div>
+
+        <div class="instrument-box anchor-box">
+          <div class="anchor-head">
+            <code>ctx get repo:src/ctx/refs.py --lines 40:42@07407f1c</code>
+            <span class="badge" id="anchor-status">RELOCATED</span>
+          </div>
+          <div class="code-diff" id="anchor-diff"></div>
+          <p class="box-note" id="anchor-verdict"></p>
+
+          <div class="anchor-metrics">
+            <div class="metric-mini">
+              <span class="mm-val accent-green" id="am-anchored-wrong">0</span>
+              <span class="mm-lbl">Anchored wrong</span>
+            </div>
+            <div class="metric-mini">
+              <span class="mm-val accent-blue" id="am-relocated">478</span>
+              <span class="mm-lbl">Relocated</span>
+            </div>
+            <div class="metric-mini">
+              <span class="mm-val accent-amber" id="am-refused">0</span>
+              <span class="mm-lbl">Refused safely</span>
+            </div>
+            <div class="metric-mini">
+              <span class="mm-val accent-red" id="am-unanchored">478</span>
+              <span class="mm-lbl">Bare lines wrong</span>
+            </div>
+          </div>
+        </div>
+
+        <div class="receipt-footnote">
+          Receipt: <code>evals/anchor-drift-2026-08-20.json</code> — across <strong>1,920</strong> replayed lookups over 40 repo files: <strong>1,452</strong> relocated, <strong>2</strong> verified in place, <strong>466</strong> refused, <strong>0</strong> wrong content (vs <strong>1,918</strong> silently wrong without anchors).
+        </div>
+      </div>
+    </section>
+
+    <!-- CHAPTER 4: CROSS-HARNESS ACP ROUTING & TASK LEDGER -->
+    <section id="routing" class="chapter chapter-split" data-chapter="4">
+      <div class="panel panel-right">
+        <div class="eyebrow">
+          <span class="dot dot-blue"></span>
+          <span>04 · ACP ORCHESTRATION · TASK LEDGER · RELAY</span>
+        </div>
+        <h2 class="chapter-title">ROUTE ACROSS HARNESSES.<br />SHARE CHECKPOINTS, NOT TRANSCRIPTS.</h2>
+        <p class="chapter-copy">
+          <code>ctx orchestrate</code> assigns each graph node to the best installed harness and model tier over Agent Client Protocol (ACP). Workers communicate through the append-only <strong>Task Ledger</strong> and live <strong>Relay</strong>—each attempt opens fresh with bounded MCP tools.
+        </p>
+
+        <div class="segmented segmented-2x2" id="route-switcher" role="tablist" aria-label="ACP route preview"></div>
+
+        <div class="instrument-box route-box">
+          <div class="route-cmd-row">
+            <code id="route-cmd"></code>
+          </div>
+          <ol class="route-steps" id="route-steps"></ol>
+          <div class="route-footer">
+            <span>Deterministic steward recovery · Resumable on kill · Zero forwarded transcripts</span>
+          </div>
+        </div>
+
+        <div class="harness-bay-list" id="harness-bay-list" aria-label="Seven ACP harness bays"></div>
+      </div>
+    </section>
+
+    <!-- CHAPTER 5: PREFIX CACHE, MEASURED RECEIPTS & QUICKSTART -->
+    <section id="receipts" class="chapter chapter-wide" data-chapter="5">
+      <div class="wide-container">
+        <div class="wide-header">
+          <div class="eyebrow">
+            <span class="dot dot-amber"></span>
+            <span>05 · PREFIX STABILITY &amp; MEASURED RECEIPTS</span>
+          </div>
+          <h2 class="chapter-title">RECEIPTS BEFORE SPECTACLE.</h2>
+          <p class="chapter-copy wide-copy">
+            Keep repeated reference bytes immutable at the front of the prompt (<code>cache_wrap.prefix</code>) and append only changing questions and selected evidence at the tail (<code>cache_wrap.suffix</code>). Every claim below comes directly from a checked-in evaluation receipt—including the runs where cost rose or tasks remained unsolved.
+          </p>
+        </div>
+
+        <!-- Prompt Prefix Architecture Strip -->
+        <div class="prefix-diagram" aria-label="Prompt cache prefix architecture">
+          <div class="prefix-block prefix-frozen">
+            <span class="pb-tag">CACHE_WRAP.PREFIX · STABLE BYTES</span>
+            <span class="pb-desc">System instructions + tool schemas + fixed reference material (reused across turns)</span>
+          </div>
+          <div class="prefix-plus">+</div>
+          <div class="prefix-block prefix-dynamic">
+            <span class="pb-tag">CACHE_WRAP.SUFFIX · CHANGING TAIL</span>
+            <span class="pb-desc">Current question + 531-token digest + retrieved spans (`ctx get`)</span>
+          </div>
+        </div>
+
+        <!-- Honest Receipts Grid -->
+        <div class="receipts-grid" id="receipts-grid"></div>
+
+        <!-- Quickstart & 3D Provenance Footer Grid -->
+        <div id="quickstart" class="quickstart-grid">
+          <div class="instrument-box qs-card">
+            <div class="eyebrow">
+              <span class="dot dot-green"></span>
+              <span>TRY IT ON A FAILING TEST</span>
+            </div>
+            <h3 class="qs-title">Three commands to contain your next test run.</h3>
+            <div class="terminal-stack">
+              <button type="button" class="cmd-line" data-copy="python -m pip install 'ctx-harness==0.5.0'">
+                <span class="cmd-step">1</span>
+                <code>python -m pip install 'ctx-harness==0.5.0'</code>
+                <span class="copy-tag">COPY</span>
+              </button>
+              <button type="button" class="cmd-line" data-copy="ctx run -- pytest -q">
+                <span class="cmd-step">2</span>
+                <code>ctx run -- pytest -q</code>
+                <span class="copy-tag">COPY</span>
+              </button>
+              <button type="button" class="cmd-line" data-copy="ctx setup && ctx doctor">
+                <span class="cmd-step">3</span>
+                <code>ctx setup &amp;&amp; ctx doctor</code>
+                <span class="copy-tag">COPY</span>
+              </button>
+            </div>
+          </div>
+
+          <div class="instrument-box provenance-card">
+            <div class="eyebrow">
+              <span class="dot dot-blue"></span>
+              <span>3D PIPELINE PROVENANCE</span>
+            </div>
+            <h3 class="qs-title">Built with antigravity-3d · Blender · Godot · Three.js</h3>
+            <ul class="prov-list">
+              <li>
+                <strong>containment_gate.glb</strong>
+                <span>74 parts · 7,738 tris · USD + Blender QA + Three.js (23/23 checks, IoU 0.9997)</span>
+              </li>
+              <li>
+                <strong>anchor_caliper.glb</strong>
+                <span>48 parts · 2,556 tris · USD + Blender QA + Three.js (25/25 checks, IoU 0.9997)</span>
+              </li>
+              <li>
+                <strong>harness_router.glb</strong>
+                <span>29 parts · 3,536 tris · USD + Blender QA + Godot 4.7.2 headless import pass</span>
+              </li>
+            </ul>
+            <p class="prov-note">
+              Real-time shaders: volumetric atmospheric dome, datum floor grid, 4,200-particle GPU evidence stream, 4 optical gate irises, anchor scan beam, and 7 ACP relay arcs.
+            </p>
+          </div>
+        </div>
+
+        <footer class="site-footer">
+          <div class="footer-brand">
+            <img src="./icons/icon.svg" alt="" width="20" height="20" />
+            <span>straitjacket · ctx-harness v0.5.0 · Apache-2.0</span>
+          </div>
+          <div class="footer-links">
+            <a href="https://github.com/vamsiramakrishnan/straitjacket" target="_blank" rel="noreferrer">GitHub Repository</a>
+            <a href="./docs/" target="_blank" rel="noreferrer">Documentation</a>
+            <button type="button" class="back-top" data-jump="#hero">Back to top ↑</button>
+          </div>
+        </footer>
+      </div>
+    </section>
+  </main>
+
+</body>
+</html>

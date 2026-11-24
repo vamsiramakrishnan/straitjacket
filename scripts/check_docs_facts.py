@@ -298,7 +298,7 @@ def main() -> int:
     for rel in (
         "README.md",
         "docs/WHY-STRAITJACKET.md",
-        "site/src/content/docs/index.mdx",
+        "site/src/content/docs/docs.mdx",
     ):
         text = _read(root, rel)
         missing = [value for value in field_claims if value not in text]

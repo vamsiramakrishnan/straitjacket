@@ -5,7 +5,7 @@ const { entry, slug } = Astro.locals.starlightRoute;
 const { title, tagline, actions } = entry.data.hero ?? {};
 ---
 
-{slug !== '' ? <DefaultHero /> : (
+{slug !== 'docs' ? <DefaultHero /> : (
   <div class="sj-intro">
     <div class="sj-intro-copy">
       <h1 id="_top" data-page-title>{title}</h1>
