@@ -1896,6 +1896,99 @@ def _inspect_alibaba_publish_fields(rel_label: str, data: Any) -> list[str]:
                 f"IMG_20260610_008.jpg, IMG_20260610_011.jpg) to image_1..image_5 in the live server and update {rel_label}."
             )
 
+    # 6. General live form schema checks: countryPriceDiff {mode, prices} & short attr_* maxlength=50.
+    cpd = fmap.get("countryPriceDiff")
+    if isinstance(cpd, str) and cpd.strip().startswith("{"):
+        try:
+            cpd = json.loads(cpd)
+        except json.JSONDecodeError:
+            cpd = None
+    if isinstance(cpd, dict) and cpd:
+        mode_v = str(cpd.get("mode") or "").strip().lower()
+        prices_v = cpd.get("prices")
+        if mode_v not in ("percent", "offset", "direct") or not isinstance(prices_v, dict):
+            issues.append(
+                f"In {rel_label}, countryPriceDiff does not match the live form schema "
+                "{'mode': 'percent'|'offset'|'direct', 'prices': {'<ISO2_CODE>': [<tier_values>]}} "
+                "(avoid nested country metadata dicts or full country-name maps); update both live server and deliverable."
+            )
+        else:
+            bad_keys = [str(ck) for ck in prices_v.keys() if not re.match(r"^[A-Z]{2,3}$", str(ck).strip())]
+            if bad_keys:
+                issues.append(
+                    f"In {rel_label}, countryPriceDiff.prices uses non-ISO country key(s) {bad_keys[:4]!r}; "
+                    "use 2-letter ISO country codes (e.g. 'US', 'DE', 'GB')."
+                )
+    for ak in ("attr_material", "attr_diameter"):
+        av = str(fmap.get(ak) or "").strip()
+        if len(av) > 50 or (len(av) > 36 and ("(" in av or ";" in av)):
+            issues.append(
+                f"In {rel_label}, short attribute '{ak}' is overly verbose ({len(av)} chars, HTML maxlength=50); "
+                "use the concise datasheet value without parenthetical commentary or certification notes."
+            )
+
+    return issues
+
+
+def _inspect_decision_vs_matrix_csv(
+    rel_label: str,
+    data: Any,
+    *,
+    out_root: Path | None = None,
+) -> list[str]:
+    """Cross-check SKU include/exclude decisions in a JSON deliverable against any sibling ``*matrix*.csv``."""
+    if out_root is None or not out_root.is_dir() or not isinstance(data, dict):
+        return []
+    raw_list = data.get("candidate_evaluations") or data.get("candidate_decisions") or data.get("decisions")
+    if not isinstance(raw_list, list) or len(raw_list) < 3:
+        return []
+    included: set[str] = set()
+    excluded: set[str] = set()
+    for item in raw_list:
+        if not isinstance(item, dict):
+            continue
+        sku = str(item.get("candidate_sku") or item.get("sku") or "").strip().upper()
+        dec = str(item.get("decision") or item.get("recommended_action") or item.get("action") or "").strip().lower()
+        if not sku or not dec:
+            continue
+        if any(tok in dec for tok in ("reject", "exclude", "standalone", "separate", "do_not_merge", "drop", "remove")):
+            excluded.add(sku)
+        elif any(tok in dec for tok in ("include", "merge", "keep", "approve", "accept", "child")):
+            included.add(sku)
+    if not included or not excluded:
+        return []
+
+    issues: list[str] = []
+    for csv_p in sorted(out_root.glob("*.csv")):
+        if "matrix" not in csv_p.name.lower():
+            continue
+        try:
+            with csv_p.open(encoding="utf-8", errors="replace", newline="") as f:
+                rows = list(csv.DictReader(f))
+        except Exception:
+            continue
+        if not rows:
+            continue
+        sku_col = None
+        for col in rows[0].keys():
+            if col and col.strip().lower() in ("sku", "child_sku", "candidate_sku", "item_sku"):
+                sku_col = col
+                break
+        if sku_col is None:
+            continue
+        matrix_skus = {str(r.get(sku_col) or "").strip().upper() for r in rows if str(r.get(sku_col) or "").strip()}
+        extra_excl = sorted(matrix_skus & excluded)
+        missing_incl = sorted(included - matrix_skus)
+        if extra_excl or missing_incl:
+            parts: list[str] = []
+            if extra_excl:
+                parts.append(f"excluded/rejected SKUs present in {csv_p.name}: {extra_excl}")
+            if missing_incl:
+                parts.append(f"included SKUs missing from {csv_p.name}: {missing_incl}")
+            issues.append(
+                f"Cross-file SKU mismatch between {rel_label} and {csv_p.name}: {'; '.join(parts)} — "
+                f"reconcile {csv_p.name} so it contains only the included/merged SKUs."
+            )
     return issues
 
 
@@ -2270,6 +2363,7 @@ def audit_deliverables(
                 *_inspect_html_section_coverage(rel_lbl, parsed, workspace_root=ws),
                 *_inspect_tier_summary_vs_csv(rel_lbl, parsed, out_root=out_root, workspace_root=ws),
                 *_inspect_variant_merger_evidence(rel_lbl, parsed, workspace_root=ws),
+                *_inspect_decision_vs_matrix_csv(rel_lbl, parsed, out_root=out_root),
                 *_inspect_trends_quality_audit(rel_lbl, parsed, workspace_root=ws),
                 *_inspect_trends_rebalance_decisions(rel_lbl, parsed),
                 *_inspect_alibaba_publish_fields(rel_lbl, parsed),

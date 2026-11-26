@@ -24,7 +24,7 @@ _SERVICE_PREFIX_SRC = (
     + r"|default\s*=\s*"
     + r"|\bconst\s+PORT\s*=\s*"
     + r"|\bPORT\s*=\s*"
-    + r"|\bstart_one\s+\S+\s+"
+    + r"|\bstart_one\s+\S+\s+[\"']?"
 )
 
 
