@@ -1,4 +1,4 @@
-"""Command-line interface for AccioBench (``doctor``, ``validate``, ``run``, ``report``)."""
+"""Command-line interface for AccioBench (``doctor``, ``validate``, ``run``, ``report``, ``tabulate``)."""
 
 from __future__ import annotations
 
@@ -12,7 +12,12 @@ from typing import Any
 from .config import BenchConfig, select_tasks
 from .loop import UnsandboxedRunRefused, scored_run_sandbox
 from .orchestrator import run_suite
-from .report import load_baseline_records, load_run_results, render_summary_report
+from .report import (
+    load_baseline_records,
+    load_run_results,
+    render_summary_report,
+    render_tabulation,
+)
 from .host import bwrap_sandbox_executable, bwrap_unavailable_reason
 from .validate import run_doctor, validate_task_referee
 
@@ -403,6 +408,56 @@ def build_parser() -> argparse.ArgumentParser:
         help="Optional file path to save the rendered report (defaults to <workdir>/acciobench_report.html when --format html)",
     )
 
+    # 5. tabulate
+    p_tab = sub.add_parser(
+        "tabulate",
+        help="Tabulate multiple model/arm workdirs or verdict JSONs side-by-side (table, markdown, csv, json).",
+    )
+    p_tab.add_argument(
+        "--run",
+        dest="runs",
+        action="append",
+        required=True,
+        help=(
+            "Repeatable run spec: 'PATH', 'LABEL=PATH', 'LABEL=PATH:arm', or "
+            "'LABEL=BASE_DIR+OVERLAY_DIR[:arm]'. Also accepts verdict/summary JSON files "
+            "(e.g. '3.8 Raw=results/full107_paired_verdict.json:raw_paired_dc8dfcc')."
+        ),
+    )
+    p_tab.add_argument(
+        "--format",
+        choices=("table", "markdown", "md", "csv", "json"),
+        default="table",
+        help="Output format: 'table', 'markdown', 'csv', or 'json' (default: table)",
+    )
+    p_tab.add_argument(
+        "--output",
+        type=Path,
+        default=None,
+        help="Optional file path to save the tabulated output",
+    )
+    p_tab.add_argument(
+        "--title",
+        default=None,
+        help="Optional custom heading for table/markdown/json outputs",
+    )
+    p_tab.add_argument(
+        "--common-tasks-only",
+        action="store_true",
+        help="Restrict directory-backed runs to the intersection of task IDs present in all of them",
+    )
+    p_tab.add_argument(
+        "--no-categories",
+        action="store_true",
+        help="Omit per-category (api/browser/cli/file) breakdown rows",
+    )
+    p_tab.add_argument(
+        "--pricing-workspace",
+        type=Path,
+        default=None,
+        help="Optional workspace root containing a .ctx-prices.json override table",
+    )
+
     return parser
 
 
@@ -657,6 +712,23 @@ def _cmd_report(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_tabulate(args: argparse.Namespace) -> int:
+    rendered = render_tabulation(
+        args.runs,
+        format=args.format,
+        include_categories=not bool(args.no_categories),
+        common_tasks_only=bool(args.common_tasks_only),
+        pricing_workspace=args.pricing_workspace,
+        title=args.title,
+    )
+    print(rendered, end="" if rendered.endswith("\n") else "\n")
+    if args.output is not None:
+        out_path = Path(args.output).expanduser().resolve()
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        out_path.write_text(rendered, encoding="utf-8")
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
@@ -669,6 +741,8 @@ def main(argv: list[str] | None = None) -> int:
             return _cmd_run(args)
         if args.subcommand == "report":
             return _cmd_report(args)
+        if args.subcommand == "tabulate":
+            return _cmd_tabulate(args)
     except (FileNotFoundError, ValueError) as exc:
         print(f"ERROR: {exc}", file=sys.stderr)
         return 2

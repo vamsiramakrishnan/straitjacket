@@ -134,27 +134,52 @@ python evals/acciobench_run.py report \
   --output ./acciobench_report.html
 ```
 
+### Tabulating Multiple Models or Runs Side-by-Side (`tabulate`)
+
+Compare multiple model/arm workdirs (and/or pre-computed verdict JSON files) in one table with model-aware pricing (`ctx/data/model-prices.json`, overridable via `.ctx-prices.json`):
+
+```bash
+# Terminal ASCII table comparing paired 3.8 runs alongside 3.7+SJ and 4-Hydrogen+SJ
+python evals/acciobench_run.py tabulate \
+  --run "3.7 Flash + SJ=./.acciobench/runs/full107_37flash_sj:sj" \
+  --run "3.8 Flash=./.acciobench/runs/full107_paired" \
+  --run "4-Hydrogen + SJ=./.acciobench/runs/full107_4hydrogen_sj:sj"
+
+# Export spreadsheet-ready CSV (overall + api/browser/cli/file slices) or Markdown/JSON
+python evals/acciobench_run.py tabulate \
+  --run "3.8 Raw=results/full107_paired_verdict.json:raw_paired_dc8dfcc" \
+  --run "3.8 + SJ=results/full107_paired_verdict.json:sj_paired_dc8dfcc" \
+  --run "4-Hydrogen + SJ=./.acciobench/runs/full107_4hydrogen_sj:sj" \
+  --format csv \
+  --output ./comparison_table.csv
+```
+
+Useful `tabulate` features:
+- **Auto-arm expansion**: passing a paired workdir without `:raw`/`:sj` emits one row per arm found.
+- **Overlay waves**: chain `LABEL=BASE_DIR+OVERLAY_DIR:sj` to score a targeted post-fix re-run over a full baseline workdir without copying directories.
+- **Partial run intersection**: pass `--common-tasks-only` to compare directory-backed runs strictly on their shared task subset.
+
 ---
 
 ## 5. Reference Results (107 Tasks, `datasets_domain_v1`)
 
-Pricing is Vertex AI GA list (`$1.50 / 1M` uncached input, `$0.15 / 1M` cached input, `$7.50 / 1M` thought + output).
+Pricing is Vertex AI GA list (`$1.50 / 1M` uncached input, `$7.50 / 1M` thought + output; cached input `$0.15 / 1M` for 3.7/3.8 Flash and `$0.075 / 1M` for 4-Hydrogen).
 
-| Metric | 3.7 Flash Baseline | 3.8 Flash (`--arm raw`) | 3.8 Flash + SJ (`--arm sj` 1-Pass) | 3.8 Flash + SJ (Best-of-Waves) |
-| --- | --- | --- | --- | --- |
-| **Solved Tasks** | `54 / 107` (`50.5%`) | `61 / 107` (`57.0%`) | **`88 / 107` (`82.2%`)** | **`105 / 107` (`98.1%`)** |
-| **Macro Capability** | `0.8273` | `0.8981` | **`0.9526`** | **`0.9965`** |
-| **API (`n=10`)** | `7 / 10` (`70.0%`) | `6 / 10` (`60.0%`) | **`8 / 10` (`80.0%`)** | **`10 / 10` (`100.0%`)** |
-| **Browser (`n=28`)** | `15 / 28` (`53.6%`) | `16 / 28` (`57.1%`) | **`24 / 28` (`85.7%`)** | **`28 / 28` (`100.0%`)** |
-| **CLI (`n=53`)** | `25 / 53` (`47.2%`) | `30 / 53` (`56.6%`) | **`43 / 53` (`81.1%`)** | **`51 / 53` (`96.2%`)** |
-| **File (`n=16`)** | `7 / 16` (`43.8%`) | `9 / 16` (`56.2%`) | **`13 / 16` (`81.2%`)** | **`16 / 16` (`100.0%`)** |
-| **Total Suite Steps** | `4,800` (med `37.0`) | `6,907` (med `56.0`) | **`6,176` (med `50.0`)** | **`6,104` (med `49.0`)** |
-| **Turns per Solved Task** | `88.9` | `113.2` | **`70.2` (`-21.0%` vs 3.7)** | **`58.1` (`-34.6%` vs 3.7)** |
-| **Total Tokens** | `~129.0M` (cal.) | `589.29M` | **`281.98M` (`-52.1%` vs raw)** | **`278.70M` (`-52.7%` vs raw)** |
-| **Uncached Input Tokens** | — | `139.59M` (`76.1%` hit) | **`43.95M` (`-68.5%`, `84.1%` hit)** | **`40.68M` (`-70.9%`, `85.1%` hit)** |
-| **Suite Cost (USD)** | `~$107.00` (cal.) | `$310.29` | **`$143.53` (`-53.7%` vs raw)** | **`$137.64` (`-55.6%` vs raw)** |
-| **Cost per Solved Task** | `~$1.98 / solve` | `$5.09 / solve` | **`$1.63 / solve` (`-17.7%` vs 3.7)** | **`$1.31 / solve` (`-33.8%` vs 3.7)** |
-| **Wall Time per Solved Task** | `10.2 min / solve` | `17.6 min / solve` | **`12.1 min / solve` (`-31.2%` vs raw)** | **`9.8 min / solve` (`-4.2%` vs 3.7)** |
+| Metric | 3.7 Flash Baseline | 3.7 Flash + SJ | 3.8 Flash (`--arm raw`) | 3.8 Flash + SJ (1-Pass) | 3.8 Flash + SJ (Best-of-Waves) | 4-Hydrogen + SJ (Pre-Fix) | 4-Hydrogen + SJ (Post-Fix) |
+| --- | :---: | :---: | :---: | :---: | :---: | :---: | :---: |
+| **Solved Tasks** | `54/107` (`50.5%`) | **`80/107` (`74.8%`)** | `61/107` (`57.0%`) | `88/107` (`82.2%`) | `105/107` (`98.1%`) | `87/107` (`81.3%`) | **`91/107` (`85.0%`)** |
+| **Macro Capability** | `0.8273` | `0.9509` | `0.8981` | `0.9526` | `0.9965` | `0.9630` | **`0.9692`** |
+| **API (`n=10`)** | `7/10` (`70.0%`) | `9/10` (`90.0%`) | `7/10` (`70.0%`) | `8/10` (`80.0%`) | `10/10` (`100.0%`) | `8/10` (`80.0%`) | `8/10` (`80.0%`) |
+| **Browser (`n=28`)** | `15/28` (`53.6%`) | `21/28` (`75.0%`) | `19/28` (`67.9%`) | `24/28` (`85.7%`) | `28/28` (`100.0%`) | `25/28` (`89.3%`) | **`26/28` (`92.9%`)** |
+| **CLI (`n=53`)** | `25/53` (`47.2%`) | `36/53` (`67.9%`) | `29/53` (`54.7%`) | `43/53` (`81.1%`) | `51/53` (`96.2%`) | `41/53` (`77.4%`) | **`44/53` (`83.0%`)** |
+| **File (`n=16`)** | `7/16` (`43.8%`) | **`14/16` (`87.5%`)** | `6/16` (`37.5%`) | `13/16` (`81.2%`) | `16/16` (`100.0%`) | `13/16` (`81.2%`) | `13/16` (`81.2%`) |
+| **Total Steps (Med)** | `4,800` (`37.0`) | `3,899` (`32.0`) | `6,907` (`56.0`) | `6,176` (`50.0`) | `6,104` (`49.0`) | `2,126` (`17.0`) | **`2,128` (`17.0`)** |
+| **Turns / Solved Task** | `88.9` | `48.7` | `113.2` | `70.2` | `58.1` | `24.4` | **`23.4`** |
+| **Total Tokens (Cache%)** | `~129.0M*` | `150.6M` (`87.5%`) | `589.3M` (`76.1%`) | `282.0M` (`84.1%`) | `278.7M` (`85.1%`) | `109.1M` (`90.3%`) | **`111.1M` (`90.5%`)** |
+| **Gen Tokens** | — | `2.67M` | `4.55M` | `5.70M` | `5.57M` | `2.37M` | **`2.39M`** |
+| **Suite Cost (USD)** | `~$107.00*` | `$67.13` | `$310.29` | `$143.53` | `$137.64` | `$40.50` | **`$40.72`** |
+| **Cost / Solved Task** | `~$1.98` | `$0.84` | `$5.09` | `$1.63` | `$1.31` | `$0.47` | **`$0.45`** |
+| **Wall Time (min/Solve)** | `9.17h` (`10.2m`) | `8.23h` (`6.2m`) | `17.87h` (`17.6m`) | `17.72h` (`12.1m`) | `17.07h` (`9.8m`) | `6.88h` (`4.7m`) | **`6.90h` (`4.5m`)** |
 
 ---
 

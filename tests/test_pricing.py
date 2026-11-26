@@ -41,9 +41,15 @@ def test_lite_matches_before_flash():
 
 
 def test_version_specific_flash_prices_differ():
-    # 3.5-flash and 3-flash are different SKUs at different prices.
+    # 3.5-flash, 3.7/3.8-flash, 4-hydrogen, and 3-flash have distinct SKU rates.
     assert pricing.price_for("gemini-3.5-flash").input == 1.50
     assert pricing.price_for("gemini-3-flash").input == 0.50
+    p37 = pricing.price_for("gemini-3.7-flash")
+    p38 = pricing.price_for("gemini-3.8-flash")
+    p4h = pricing.price_for("gemini-4-hydrogen")
+    assert (p37.input, p37.output, p37.cache_read) == (1.50, 7.50, 0.15)
+    assert (p38.input, p38.output, p38.cache_read) == (1.50, 7.50, 0.15)
+    assert (p4h.input, p4h.output, p4h.cache_read) == (1.50, 7.50, 0.075)
 
 
 def test_unknown_model_uses_fallback():

@@ -251,7 +251,17 @@ python evals/acciobench_run.py report \
   --baseline-json ./baseline_summary.json \
   --format html \
   --output ./acciobench_report.html
+
+# Tabulate multiple model/arm workdirs (and/or pre-computed verdict JSONs) side-by-side
+python evals/acciobench_run.py tabulate \
+  --run "3.7 Flash + SJ=./.acciobench/full107_37flash_sj:sj" \
+  --run "3.8 Flash=./.acciobench/full107_paired" \
+  --run "4-Hydrogen + SJ=./.acciobench/full107_4hydrogen_sj:sj" \
+  --format markdown \
+  --output ./comparison_table.md
 ```
+
+`tabulate` supports `--format table|markdown|csv|json`, model-aware pricing via `ctx.pricing` (overridable with `.ctx-prices.json` / `--pricing-workspace`), `+overlay` chaining (`LABEL=BASE+OVERLAY:sj`), pre-computed verdict JSON selectors (`LABEL=verdict.json:key`), and `--common-tasks-only` for apples-to-apples partial runs.
 
 **Unpaired tasks.** A task that one arm has no scorable result for (ungraded, API or
 setup error, not run, superseded by a configuration change) is left out of every paired
@@ -357,8 +367,8 @@ evals/
     ├── loop.py                # Single-trial agent turn loop, residence compaction & grading
     ├── orchestrator.py        # Multi-worker slot pool & paired multi-arm suite runner
     ├── validate.py            # Environment `doctor` & model-free sandbox/grader `validate` referee
-    ├── report.py              # Paired A/B & historical baseline reporting (table/markdown/json)
-    ├── cli.py                 # Subcommand parser (`doctor`, `validate`, `run`, `report`)
+    ├── report.py              # Paired A/B reporting & multi-run tabulate (table/markdown/csv/json)
+    ├── cli.py                 # Subcommand parser (`doctor`, `validate`, `run`, `report`, `tabulate`)
     ├── bootstrap.sh           # One-command external setup script
     └── README.md              # Documentation & reproducibility guide
 ```

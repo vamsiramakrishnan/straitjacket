@@ -9,9 +9,12 @@ formats.
 
 from __future__ import annotations
 
+import csv
+import io
 import json
 from pathlib import Path
 import statistics
+import sys
 from typing import Any
 
 from .config import RunMetrics
@@ -976,3 +979,694 @@ def render_summary_report(
     if fmt == "markdown":
         return _render_markdown(payload)
     return _render_table(payload)
+
+
+# ---------------------------------------------------------------------------
+# Multi-run / multi-model side-by-side tabulation (`acciobench_run.py tabulate`)
+# ---------------------------------------------------------------------------
+
+
+def _load_ctx_pricing(workspace_root: Path | None = None) -> tuple[Any, dict[str, Any]]:
+    """Load ``ctx.pricing`` and its price table (honoring optional ``.ctx-prices.json``)."""
+    try:
+        from ctx import pricing as ctx_pricing  # type: ignore[import-not-found]
+    except ImportError:
+        repo_src = Path(__file__).resolve().parents[2] / "src"
+        if repo_src.is_dir() and str(repo_src) not in sys.path:
+            sys.path.insert(0, str(repo_src))
+        from ctx import pricing as ctx_pricing  # type: ignore[import-not-found]
+    return ctx_pricing, ctx_pricing.load_table(workspace_root)
+
+
+def parse_tabulate_spec(spec: str) -> dict[str, Any]:
+    """Parse a ``--run`` spec for ``tabulate``.
+
+    Accepted forms::
+
+        PATH                         # auto-label from model + arm (expands raw & sj)
+        LABEL=PATH                   # explicit label for directory (or JSON file)
+        LABEL=PATH:ARM               # select a single arm ('raw' / 'sj') or JSON key
+        LABEL=BASE_DIR+OVERLAY[:ARM] # overlay task results from OVERLAY on top of BASE_DIR
+    """
+    raw = (spec or "").strip()
+    if not raw:
+        raise ValueError("Empty --run spec.")
+
+    label: str | None = None
+    target = raw
+    if "=" in raw:
+        cand_label, cand_rhs = raw.split("=", 1)
+        if (
+            cand_label.strip()
+            and "/" not in cand_label
+            and "\\" not in cand_label
+            and cand_rhs.strip()
+        ):
+            label = cand_label.strip()
+            target = cand_rhs.strip()
+
+    selector: str | None = None
+    path_part = target
+    if ":" in target:
+        cand_path, cand_sel = target.rsplit(":", 1)
+        if (
+            cand_sel.strip()
+            and "/" not in cand_sel
+            and "\\" not in cand_sel
+            and len(cand_path.strip()) > 1
+        ):
+            path_part = cand_path.strip()
+            selector = cand_sel.strip()
+
+    single = Path(path_part).expanduser()
+    if "+" in path_part and not single.exists():
+        paths = [Path(seg.strip()).expanduser() for seg in path_part.split("+") if seg.strip()]
+    else:
+        paths = [single]
+
+    if not paths:
+        raise ValueError(f"Could not parse path from --run spec: {spec!r}")
+    return {
+        "label": label,
+        "paths": paths,
+        "selector": selector,
+        "raw_spec": raw,
+    }
+
+
+def _trial_cost_usd(
+    m: RunMetrics,
+    *,
+    ctx_pricing: Any,
+    pricing_table: dict[str, Any],
+) -> tuple[float, Any]:
+    price = ctx_pricing.price_for(m.model_id or "", table=pricing_table)
+    prompt = int(m.prompt_tokens or 0)
+    cached = int(m.cached_tokens or 0)
+    uncached = max(0, prompt - cached)
+    gen = int(m.gen_tokens or (int(m.thought_tokens or 0) + int(m.output_tokens or 0)))
+    usd = price.cost_usd(
+        input_tokens=uncached,
+        cache_read_tokens=cached,
+        output_tokens=gen,
+    )
+    return float(usd), price
+
+
+def _dominant_model(rows: list[RunMetrics]) -> str:
+    counts: dict[str, int] = {}
+    for r in rows:
+        mid = str(r.model_id or "").strip()
+        if mid and mid != "unknown":
+            counts[mid] = counts.get(mid, 0) + 1
+    if not counts:
+        return "unknown"
+    return sorted(counts.items(), key=lambda kv: (-kv[1], kv[0]))[0][0]
+
+
+def _summarize_tabulate_slice(
+    rows: list[RunMetrics],
+    *,
+    ctx_pricing: Any,
+    pricing_table: dict[str, Any],
+) -> tuple[dict[str, Any], dict[str, dict[str, float]]]:
+    scorable = [r for r in rows if _is_scorable(r)]
+    infra_errors = sum(
+        1
+        for r in rows
+        if r.grading_error or str(r.termination or "").strip() in _INFRA_ERROR_TERMINATIONS
+    )
+    unsandboxed = count_unsandboxed(scorable)
+    isolation_unknown = count_isolation_unknown(scorable)
+
+    n = len(scorable)
+    solved = sum(1 for r in scorable if r.passed)
+    caps = [float(r.capacity_score or 0.0) for r in scorable]
+    steps_list = [int(r.steps or 0) for r in scorable]
+    steps_total = sum(steps_list)
+    prompt = sum(int(r.prompt_tokens or 0) for r in scorable)
+    cached = sum(int(r.cached_tokens or 0) for r in scorable)
+    uncached = sum(max(0, int(r.prompt_tokens or 0) - int(r.cached_tokens or 0)) for r in scorable)
+    thought = sum(int(r.thought_tokens or 0) for r in scorable)
+    output = sum(int(r.output_tokens or 0) for r in scorable)
+    gen = sum(
+        int(r.gen_tokens or (int(r.thought_tokens or 0) + int(r.output_tokens or 0)))
+        for r in scorable
+    )
+    tot = prompt + gen
+    wall_s = sum(float(r.wall_clock_s or 0.0) for r in scorable)
+    med_wall_s = statistics.median([float(r.wall_clock_s or 0.0) for r in scorable]) if scorable else 0.0
+    epochs = sum(int(r.compaction_epochs or 0) for r in scorable)
+    gates = sum(int(r.emission_gate_hits or 0) for r in scorable)
+
+    cost_usd = 0.0
+    pricing_used: dict[str, dict[str, float]] = {}
+    for r in scorable:
+        usd, price = _trial_cost_usd(r, ctx_pricing=ctx_pricing, pricing_table=pricing_table)
+        cost_usd += usd
+        mid = str(r.model_id or "unknown").strip() or "unknown"
+        if mid not in pricing_used:
+            pricing_used[mid] = {
+                "uncached_input_usd": round(price.input, 4),
+                "cached_input_usd": round(price.cache_read, 4),
+                "generated_usd": round(price.output, 4),
+            }
+
+    wall_m = wall_s / 60.0
+    summary = {
+        "n": n,
+        "solved": solved,
+        "solve_pct": round(100.0 * solved / n, 2) if n else 0.0,
+        "macro_cap": round(sum(caps) / n, 4) if n else 0.0,
+        "steps": steps_total,
+        "med_steps": round(float(statistics.median(steps_list)), 1) if steps_list else 0.0,
+        "steps_per_solve": round(steps_total / solved, 1) if solved else 0.0,
+        "total_tokens": tot,
+        "prompt_tokens": prompt,
+        "cached_tokens": cached,
+        "cache_hit_pct": round(100.0 * cached / prompt, 2) if prompt else 0.0,
+        "uncached_tokens": uncached,
+        "thought_tokens": thought,
+        "output_tokens": output,
+        "gen_tokens": gen,
+        "cost_usd": round(cost_usd, 2),
+        "cost_per_solve_usd": round(cost_usd / solved, 2) if solved else 0.0,
+        "wall_s": round(wall_s, 1),
+        "wall_m": round(wall_m, 1),
+        "wall_h": round(wall_s / 3600.0, 2),
+        "med_wall_s": round(float(med_wall_s), 1),
+        "wall_m_per_solve": round(wall_m / solved, 1) if solved else 0.0,
+        "compaction_epochs": epochs,
+        "emission_gate_hits": gates,
+        "infra_errors": infra_errors,
+        "unsandboxed": unsandboxed,
+        "isolation_unknown": isolation_unknown,
+    }
+    return summary, pricing_used
+
+
+def _normalize_precomputed_slice(raw: dict[str, Any]) -> dict[str, Any]:
+    n = int(raw.get("n") or 0)
+    solved = int(raw.get("solved") or 0)
+    steps = int(raw.get("steps", raw.get("steps_total", 0)) or 0)
+    med_steps = float(raw.get("med_steps", raw.get("steps_median", 0.0)) or 0.0)
+    prompt = int(raw.get("prompt_tokens") or 0)
+    cached = int(raw.get("cached_tokens") or 0)
+    uncached = int(raw.get("uncached_tokens", max(0, prompt - cached)) or 0)
+    thought = int(raw.get("thought_tokens") or 0)
+    output = int(raw.get("output_tokens") or 0)
+    gen = int(raw.get("gen_tokens", thought + output) or 0)
+    tot = int(raw.get("total_tokens", prompt + gen) or 0)
+    cost = float(raw.get("cost_usd") or 0.0)
+    wall_s = float(raw.get("wall_s", float(raw.get("wall_m", raw.get("wall_clock_min", 0.0)) or 0.0) * 60.0) or 0.0)
+    wall_m = float(raw.get("wall_m", wall_s / 60.0) or 0.0)
+    wall_h = float(raw.get("wall_h", wall_s / 3600.0) or 0.0)
+    return {
+        "n": n,
+        "solved": solved,
+        "solve_pct": round(float(raw.get("solve_pct", (100.0 * solved / n) if n else 0.0) or 0.0), 2),
+        "macro_cap": round(float(raw.get("macro_cap", raw.get("capacity_mean", 0.0)) or 0.0), 4),
+        "steps": steps,
+        "med_steps": round(med_steps, 1),
+        "steps_per_solve": round(float(raw.get("steps_per_solve", (steps / solved) if solved else 0.0) or 0.0), 1),
+        "total_tokens": tot,
+        "prompt_tokens": prompt,
+        "cached_tokens": cached,
+        "cache_hit_pct": round(
+            float(raw.get("cache_hit_pct", (100.0 * cached / prompt) if prompt else 0.0) or 0.0),
+            2,
+        ),
+        "uncached_tokens": uncached,
+        "thought_tokens": thought,
+        "output_tokens": output,
+        "gen_tokens": gen,
+        "cost_usd": round(cost, 2),
+        "cost_per_solve_usd": round(
+            float(raw.get("cost_per_solve_usd", (cost / solved) if solved else 0.0) or 0.0),
+            2,
+        ),
+        "wall_s": round(wall_s, 1),
+        "wall_m": round(wall_m, 1),
+        "wall_h": round(wall_h, 2),
+        "med_wall_s": round(float(raw.get("med_wall_s") or 0.0), 1),
+        "wall_m_per_solve": round(
+            float(raw.get("wall_m_per_solve", (wall_m / solved) if solved else 0.0) or 0.0),
+            1,
+        ),
+        "compaction_epochs": int(raw.get("compaction_epochs") or 0),
+        "emission_gate_hits": int(raw.get("emission_gate_hits") or 0),
+        "infra_errors": int(raw.get("infra_errors", raw.get("grading_errors", 0)) or 0),
+        "unsandboxed": int(raw.get("unsandboxed", raw.get("unsandboxed_runs", 0)) or 0),
+        "isolation_unknown": int(raw.get("isolation_unknown", raw.get("isolation_unknown_runs", 0)) or 0),
+    }
+
+
+def _load_tabulate_json_entries(
+    json_path: Path,
+    *,
+    label: str | None,
+    selector: str | None,
+) -> list[dict[str, Any]]:
+    doc = json.loads(json_path.read_text(encoding="utf-8"))
+    if not isinstance(doc, dict):
+        raise ValueError(f"Expected JSON object in {json_path}")
+
+    entries: list[dict[str, Any]] = []
+    if isinstance(doc.get("overall"), dict):
+        overall_map = doc["overall"]
+        by_cat_map = doc.get("by_category") if isinstance(doc.get("by_category"), dict) else {}
+        keys = [selector] if selector else list(overall_map.keys())
+        for k in keys:
+            if k not in overall_map or not isinstance(overall_map[k], dict):
+                avail = ", ".join(sorted(overall_map.keys()))
+                raise ValueError(f"Key {k!r} not found in {json_path} overall (available: {avail})")
+            cat_out: dict[str, dict[str, Any]] = {}
+            for cat_name, cat_arms in by_cat_map.items():
+                if isinstance(cat_arms, dict) and isinstance(cat_arms.get(k), dict):
+                    cat_out[str(cat_name)] = _normalize_precomputed_slice(cat_arms[k])
+            row_label = label if (label and len(keys) == 1) else (f"{label} ({k})" if label else str(k))
+            model_hint = str(
+                overall_map[k].get("model")
+                or (doc.get("model") if len(overall_map) == 1 else "")
+                or "precomputed"
+            )
+            arm_hint = str(overall_map[k].get("arm") or k)
+            entries.append(
+                {
+                    "label": row_label,
+                    "model": model_hint,
+                    "arm": arm_hint,
+                    "source": str(json_path),
+                    "source_kind": "json",
+                    "per_task": None,
+                    "overall": _normalize_precomputed_slice(overall_map[k]),
+                    "by_category": cat_out,
+                }
+            )
+        return entries
+
+    if isinstance(doc.get("arms"), dict):
+        arms_map = doc["arms"]
+        keys = [selector] if selector else list(arms_map.keys())
+        for k in keys:
+            arm_doc = arms_map.get(k)
+            if not isinstance(arm_doc, dict) or not isinstance(arm_doc.get("overall"), dict):
+                avail = ", ".join(sorted(arms_map.keys()))
+                raise ValueError(f"Arm {k!r} not found in {json_path} arms (available: {avail})")
+            cat_out = {}
+            if isinstance(arm_doc.get("by_category"), dict):
+                for cat_name, cat_val in arm_doc["by_category"].items():
+                    if isinstance(cat_val, dict):
+                        cat_out[str(cat_name)] = _normalize_precomputed_slice(cat_val)
+            row_label = label if (label and len(keys) == 1) else (f"{label} ({k})" if label else f"{json_path.stem} ({k})")
+            entries.append(
+                {
+                    "label": row_label,
+                    "model": str(arm_doc.get("model") or "precomputed"),
+                    "arm": str(k),
+                    "source": str(json_path),
+                    "source_kind": "json",
+                    "per_task": None,
+                    "overall": _normalize_precomputed_slice(arm_doc["overall"]),
+                    "by_category": cat_out,
+                }
+            )
+        return entries
+
+    raise ValueError(
+        f"Unsupported JSON summary schema in {json_path}; expected 'overall' or 'arms' top-level object."
+    )
+
+
+def compute_tabulation_payload(
+    run_specs: list[str],
+    *,
+    common_tasks_only: bool = False,
+    pricing_workspace: Path | None = None,
+    title: str | None = None,
+) -> dict[str, Any]:
+    """Load multiple workdirs (with optional ``:arm`` and ``+overlay``) or verdict JSONs and tabulate side-by-side."""
+    if not run_specs:
+        raise ValueError("Pass at least one --run spec to tabulate.")
+
+    ctx_pricing, pricing_table = _load_ctx_pricing(pricing_workspace)
+    raw_entries: list[dict[str, Any]] = []
+
+    for raw_spec in run_specs:
+        spec = parse_tabulate_spec(raw_spec)
+        paths: list[Path] = spec["paths"]
+        label: str | None = spec["label"]
+        selector: str | None = spec["selector"]
+
+        if len(paths) == 1 and paths[0].is_file() and paths[0].suffix.lower() == ".json":
+            raw_entries.extend(_load_tabulate_json_entries(paths[0], label=label, selector=selector))
+            continue
+
+        for p in paths:
+            if not p.exists():
+                raise FileNotFoundError(f"Run path does not exist: {p}")
+
+        per_path_results = [load_run_results(p, arm=selector) for p in paths]
+        all_arms_found = {r.arm for batch in per_path_results for r in batch}
+        if not all_arms_found:
+            raise ValueError(
+                f"No completed result.json files found for --run {raw_spec!r}"
+                + (f" (arm={selector!r})" if selector else "")
+            )
+        ordered_arms = _ordered_keys(all_arms_found, ("raw", "sj"))
+
+        for arm_name in ordered_arms:
+            merged_by_task: dict[str, RunMetrics] = {}
+            for batch in per_path_results:
+                arm_rows = [r for r in batch if r.arm == arm_name]
+                if not arm_rows:
+                    continue
+                collapsed, _ = _collapse_arm_runs(arm_rows)
+                for tid, metric in collapsed.items():
+                    merged_by_task[tid] = metric
+
+            dom_model = _dominant_model(list(merged_by_task.values()))
+            if label:
+                row_label = label if len(ordered_arms) == 1 else f"{label} ({arm_name})"
+            else:
+                base_name = dom_model if dom_model != "unknown" else paths[0].name
+                row_label = f"{base_name} ({arm_name})"
+
+            raw_entries.append(
+                {
+                    "label": row_label,
+                    "model": dom_model,
+                    "arm": arm_name,
+                    "source": "+".join(str(p) for p in paths),
+                    "source_kind": "workdir",
+                    "per_task": merged_by_task,
+                    "overall": None,
+                    "by_category": None,
+                }
+            )
+
+    common_task_ids: set[str] | None = None
+    if common_tasks_only:
+        dir_entries = [e for e in raw_entries if isinstance(e.get("per_task"), dict)]
+        if dir_entries:
+            common_task_ids = set(dir_entries[0]["per_task"].keys())
+            for e in dir_entries[1:]:
+                common_task_ids &= set(e["per_task"].keys())
+
+    pricing_by_model: dict[str, dict[str, float]] = {}
+    categories_found: set[str] = set()
+    final_runs: list[dict[str, Any]] = []
+
+    for e in raw_entries:
+        if e["source_kind"] == "workdir":
+            per_task: dict[str, RunMetrics] = e["per_task"]
+            if common_task_ids is not None:
+                rows = [m for tid, m in sorted(per_task.items()) if tid in common_task_ids]
+            else:
+                rows = [m for _, m in sorted(per_task.items())]
+            overall, used_prices = _summarize_tabulate_slice(
+                rows,
+                ctx_pricing=ctx_pricing,
+                pricing_table=pricing_table,
+            )
+            pricing_by_model.update(used_prices)
+            by_cat: dict[str, dict[str, Any]] = {}
+            row_cats = _ordered_keys({r.category for r in rows}, _ORDERED_CATEGORIES)
+            for c in row_cats:
+                c_rows = [r for r in rows if r.category == c]
+                c_sum, _ = _summarize_tabulate_slice(
+                    c_rows,
+                    ctx_pricing=ctx_pricing,
+                    pricing_table=pricing_table,
+                )
+                by_cat[c] = c_sum
+                categories_found.add(c)
+        else:
+            overall = e["overall"]
+            by_cat = e["by_category"] or {}
+            categories_found.update(by_cat.keys())
+
+        final_runs.append(
+            {
+                "label": e["label"],
+                "model": e["model"],
+                "arm": e["arm"],
+                "source": e["source"],
+                "source_kind": e["source_kind"],
+                "overall": overall,
+                "by_category": by_cat,
+            }
+        )
+
+    ordered_cats = _ordered_keys(categories_found, _ORDERED_CATEGORIES)
+    return {
+        "title": title or "AccioBench Multi-Run Comparison",
+        "common_tasks_only": bool(common_tasks_only),
+        "common_task_count": len(common_task_ids) if common_task_ids is not None else None,
+        "categories": ordered_cats,
+        "pricing_per_1m": pricing_by_model,
+        "runs": final_runs,
+    }
+
+
+def _fmt_tok_m(tokens: int) -> str:
+    if not tokens:
+        return "—"
+    return f"{tokens / 1_000_000:.1f}M"
+
+
+def _fmt_gen_m(tokens: int) -> str:
+    if not tokens:
+        return "—"
+    return f"{tokens / 1_000_000:.2f}M"
+
+
+def _fmt_usd(val: float, *, has_tokens: bool) -> str:
+    if val <= 0 and not has_tokens:
+        return "—"
+    return f"${val:.2f}"
+
+
+def _render_tabulate_table(payload: dict[str, Any], *, include_categories: bool) -> str:
+    runs = payload["runs"]
+    cats = payload["categories"]
+    lines: list[str] = []
+    label_w = max(24, min(42, max((len(r["label"]) for r in runs), default=24)))
+
+    title = payload.get("title") or "AccioBench Multi-Run Comparison"
+    if payload.get("common_tasks_only") and payload.get("common_task_count") is not None:
+        title += f" (common tasks n={payload['common_task_count']})"
+
+    header = (
+        f"{'Run / Arm':<{label_w}} | {'Solved':>14} | {'Cap':>6} | {'Steps (med)':>13} | "
+        f"{'TotTok':>7} | {'Cache%':>6} | {'GenTok':>6} | {'Cost($)':>8} | {'$/Slv':>6} | {'Wall':>6} | {'m/Slv':>5}"
+    )
+    sep = "=" * len(header)
+    lines.append(sep)
+    lines.append(f" {title}")
+    lines.append(sep)
+    lines.append(header)
+    lines.append("-" * len(header))
+
+    warnings: list[str] = []
+    for r in runs:
+        m = r["overall"]
+        has_tok = int(m["total_tokens"] or 0) > 0
+        solved_s = f"{m['solved']}/{m['n']} ({m['solve_pct']:4.1f}%)"
+        steps_s = f"{m['steps']} ({m['med_steps']:.1f})"
+        cache_s = f"{m['cache_hit_pct']:.1f}%" if m["prompt_tokens"] else "—"
+        wall_s = f"{m['wall_h']:.2f}h" if m["wall_s"] else "—"
+        mps_s = f"{m['wall_m_per_solve']:.1f}" if (m["wall_s"] and m["solved"]) else "—"
+        lines.append(
+            f"{r['label']:<{label_w}} | {solved_s:>14} | {m['macro_cap']:>6.4f} | {steps_s:>13} | "
+            f"{_fmt_tok_m(m['total_tokens']):>7} | {cache_s:>6} | {_fmt_gen_m(m['gen_tokens']):>6} | "
+            f"{_fmt_usd(m['cost_usd'], has_tokens=has_tok):>8} | "
+            f"{_fmt_usd(m['cost_per_solve_usd'], has_tokens=has_tok):>6} | {wall_s:>6} | {mps_s:>5}"
+        )
+        if m["infra_errors"] > 0:
+            warnings.append(f"NOTE: {r['label']} has {m['infra_errors']} unscorable infra/grading error(s).")
+        if m["unsandboxed"] > 0:
+            warnings.append(f"WARNING: {r['label']} has {m['unsandboxed']} unsandboxed trial(s) (sandbox='none').")
+
+    if include_categories and cats:
+        lines.append("")
+        col_w = max(14, min(22, max((len(r["label"]) for r in runs), default=14)))
+        cat_hdr = f"{'Category':<12}" + "".join(f" | {r['label'][:col_w]:>{col_w}}" for r in runs)
+        lines.append(cat_hdr)
+        lines.append("-" * len(cat_hdr))
+        for c in cats:
+            row_cells = []
+            for r in runs:
+                cm = (r.get("by_category") or {}).get(c)
+                if cm and cm.get("n"):
+                    row_cells.append(f"{cm['solved']}/{cm['n']} ({cm['solve_pct']:4.1f}%)")
+                else:
+                    row_cells.append("—")
+            lines.append(f"{c:<12}" + "".join(f" | {cell:>{col_w}}" for cell in row_cells))
+
+    if warnings:
+        lines.append("")
+        lines.extend(warnings)
+
+    return "\n".join(lines) + "\n"
+
+
+def _render_tabulate_markdown(payload: dict[str, Any], *, include_categories: bool) -> str:
+    runs = payload["runs"]
+    cats = payload["categories"]
+    title = payload.get("title") or "AccioBench Multi-Run Comparison"
+    if payload.get("common_tasks_only") and payload.get("common_task_count") is not None:
+        title += f" (common tasks n={payload['common_task_count']})"
+
+    lines: list[str] = [f"## {title}", ""]
+    lines.append(
+        "| Run / Arm | Solved (%) | Macro Cap | Steps (Med / Per Solve) | Total Tokens | Cache Hit | Gen Tokens | Cost (USD) | $/Solve | Wall Time (min/Solve) | Epochs |"
+    )
+    lines.append("| :--- | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: |")
+
+    warnings: list[str] = []
+    for r in runs:
+        m = r["overall"]
+        has_tok = int(m["total_tokens"] or 0) > 0
+        cache_s = f"{m['cache_hit_pct']:.1f}%" if m["prompt_tokens"] else "—"
+        wall_s = f"{m['wall_h']:.2f}h ({m['wall_m_per_solve']:.1f}m)" if m["wall_s"] else "—"
+        lines.append(
+            f"| {r['label']} | {m['solved']}/{m['n']} ({m['solve_pct']:.1f}%) | {m['macro_cap']:.4f} | "
+            f"{m['steps']:,} ({m['med_steps']:.1f} / {m['steps_per_solve']:.1f}) | "
+            f"{_fmt_tok_m(m['total_tokens'])} | {cache_s} | {_fmt_gen_m(m['gen_tokens'])} | "
+            f"{_fmt_usd(m['cost_usd'], has_tokens=has_tok)} | "
+            f"{_fmt_usd(m['cost_per_solve_usd'], has_tokens=has_tok)} | {wall_s} | {m['compaction_epochs']} |"
+        )
+        if m["infra_errors"] > 0:
+            warnings.append(f"> Note: `{r['label']}` had {m['infra_errors']} unscorable infra/grading error(s).")
+        if m["unsandboxed"] > 0:
+            warnings.append(f"> Warning: `{r['label']}` had {m['unsandboxed']} unsandboxed trial(s) (`sandbox=\"none\"`).")
+
+    if include_categories and cats:
+        lines.append("")
+        lines.append("### Category Breakdown (Solve Rate)")
+        lines.append("")
+        lines.append("| Category | " + " | ".join(r["label"] for r in runs) + " |")
+        lines.append("| :--- | " + " | ".join(":---:" for _ in runs) + " |")
+        for c in cats:
+            cells = []
+            for r in runs:
+                cm = (r.get("by_category") or {}).get(c)
+                if cm and cm.get("n"):
+                    cells.append(f"{cm['solved']}/{cm['n']} ({cm['solve_pct']:.1f}%)")
+                else:
+                    cells.append("—")
+            lines.append(f"| {c} | " + " | ".join(cells) + " |")
+
+    if warnings:
+        lines.append("")
+        lines.extend(warnings)
+
+    return "\n".join(lines) + "\n"
+
+
+def _render_tabulate_csv(payload: dict[str, Any], *, include_categories: bool) -> str:
+    buf = io.StringIO()
+    cols = [
+        "run",
+        "slice",
+        "model",
+        "arm",
+        "n",
+        "solved",
+        "solve_pct",
+        "macro_cap",
+        "steps",
+        "med_steps",
+        "steps_per_solve",
+        "total_tokens",
+        "prompt_tokens",
+        "cached_tokens",
+        "cache_hit_pct",
+        "uncached_tokens",
+        "gen_tokens",
+        "cost_usd",
+        "cost_per_solve_usd",
+        "wall_h",
+        "wall_m",
+        "wall_m_per_solve",
+        "compaction_epochs",
+        "infra_errors",
+        "unsandboxed",
+    ]
+    writer = csv.DictWriter(buf, fieldnames=cols)
+    writer.writeheader()
+    cats = payload["categories"] if include_categories else []
+    for r in payload["runs"]:
+        slices: list[tuple[str, dict[str, Any]]] = [("overall", r["overall"])]
+        for c in cats:
+            cm = (r.get("by_category") or {}).get(c)
+            if cm:
+                slices.append((c, cm))
+        for slice_name, m in slices:
+            writer.writerow(
+                {
+                    "run": r["label"],
+                    "slice": slice_name,
+                    "model": r["model"],
+                    "arm": r["arm"],
+                    "n": m["n"],
+                    "solved": m["solved"],
+                    "solve_pct": m["solve_pct"],
+                    "macro_cap": m["macro_cap"],
+                    "steps": m["steps"],
+                    "med_steps": m["med_steps"],
+                    "steps_per_solve": m["steps_per_solve"],
+                    "total_tokens": m["total_tokens"],
+                    "prompt_tokens": m["prompt_tokens"],
+                    "cached_tokens": m["cached_tokens"],
+                    "cache_hit_pct": m["cache_hit_pct"],
+                    "uncached_tokens": m["uncached_tokens"],
+                    "gen_tokens": m["gen_tokens"],
+                    "cost_usd": m["cost_usd"],
+                    "cost_per_solve_usd": m["cost_per_solve_usd"],
+                    "wall_h": m["wall_h"],
+                    "wall_m": m["wall_m"],
+                    "wall_m_per_solve": m["wall_m_per_solve"],
+                    "compaction_epochs": m["compaction_epochs"],
+                    "infra_errors": m["infra_errors"],
+                    "unsandboxed": m["unsandboxed"],
+                }
+            )
+    return buf.getvalue()
+
+
+def render_tabulation(
+    run_specs_or_payload: list[str] | dict[str, Any],
+    *,
+    format: str = "table",
+    include_categories: bool = True,
+    common_tasks_only: bool = False,
+    pricing_workspace: Path | None = None,
+    title: str | None = None,
+) -> str:
+    """Render a multi-run / multi-model comparison table in ``table``, ``markdown``, ``csv``, or ``json`` format."""
+    fmt = (format or "table").strip().lower()
+    if fmt == "md":
+        fmt = "markdown"
+    if fmt not in ("table", "markdown", "csv", "json"):
+        raise ValueError(
+            f"Unsupported tabulate format {format!r}; choose from 'table', 'markdown', 'csv', or 'json'."
+        )
+    payload = (
+        run_specs_or_payload
+        if isinstance(run_specs_or_payload, dict)
+        else compute_tabulation_payload(
+            run_specs_or_payload,
+            common_tasks_only=common_tasks_only,
+            pricing_workspace=pricing_workspace,
+            title=title,
+        )
+    )
+    if fmt == "json":
+        return json.dumps(payload, indent=2, ensure_ascii=False)
+    if fmt == "csv":
+        return _render_tabulate_csv(payload, include_categories=include_categories)
+    if fmt == "markdown":
+        return _render_tabulate_markdown(payload, include_categories=include_categories)
+    return _render_tabulate_table(payload, include_categories=include_categories)

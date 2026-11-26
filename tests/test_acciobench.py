@@ -6005,3 +6005,174 @@ def test_hydrogen_sj_fixes_ports_cache_judge_stripe_and_schema(tmp_path: Path) -
     assert any("SKU-C" in a and "variation_matrix.csv" in a for a in res_mat.advisories)
 
 
+def test_tabulate_multi_run_pricing_overlay_json_and_cli(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Verify multi-model/arm tabulation: auto-expansion, :arm, +overlay, verdict JSON,
+    --common-tasks-only, model-aware ctx.pricing (90% vs 95% cache discount), and CLI formats."""
+    import csv
+    import io
+    from evals.acciobench.report import compute_tabulation_payload, parse_tabulate_spec
+
+    def _write_trial(workdir: Path, metric: RunMetrics) -> None:
+        p = workdir / "runs" / f"{metric.task_id}__{metric.arm}__t1_meta" / "result.json"
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(json.dumps(metric.to_dict(), indent=2), encoding="utf-8")
+
+    # 1. Spec parser edge cases.
+    s1 = parse_tabulate_spec("3.8 Raw=/tmp/w1:raw")
+    assert s1["label"] == "3.8 Raw" and s1["selector"] == "raw" and s1["paths"] == [Path("/tmp/w1")]
+    s2 = parse_tabulate_spec("4H Post=/tmp/base+/tmp/overlay:sj")
+    assert s2["label"] == "4H Post" and s2["selector"] == "sj" and s2["paths"] == [Path("/tmp/base"), Path("/tmp/overlay")]
+
+    # 2. Paired workdir (3.8 Flash raw + sj) + Hydrogen base workdir + Hydrogen overlay workdir.
+    w_paired = tmp_path / "w_paired"
+    w_h4_base = tmp_path / "w_h4_base"
+    w_h4_v2 = tmp_path / "w_h4_v2"
+
+    # Common tasks: api-1 (api) and cli-1 (cli); extra task in paired: file-extra (file).
+    _write_trial(
+        w_paired,
+        RunMetrics(
+            task_id="api-1", task_rel="api/api-1", category="api", arm="raw",
+            model_id="gemini-3.8-flash", steps=20, prompt_tokens=1_000_000, cached_tokens=500_000,
+            thought_tokens=80_000, output_tokens=20_000, wall_clock_s=120.0,
+            passed=False, capacity_score=0.5, sandbox="bwrap",
+        ),
+    )
+    _write_trial(
+        w_paired,
+        RunMetrics(
+            task_id="api-1", task_rel="api/api-1", category="api", arm="sj",
+            model_id="gemini-3.8-flash", steps=12, prompt_tokens=1_000_000, cached_tokens=800_000,
+            thought_tokens=80_000, output_tokens=20_000, wall_clock_s=60.0,
+            passed=True, capacity_score=1.0, compaction_epochs=2, sandbox="bwrap",
+        ),
+    )
+    _write_trial(
+        w_paired,
+        RunMetrics(
+            task_id="cli-1", task_rel="cli/cli-1", category="cli", arm="sj",
+            model_id="gemini-3.8-flash", steps=14, prompt_tokens=500_000, cached_tokens=400_000,
+            thought_tokens=40_000, output_tokens=10_000, wall_clock_s=60.0,
+            passed=True, capacity_score=1.0, sandbox="bwrap",
+        ),
+    )
+    _write_trial(
+        w_paired,
+        RunMetrics(
+            task_id="file-extra", task_rel="file/file-extra", category="file", arm="sj",
+            model_id="gemini-3.8-flash", steps=10, prompt_tokens=200_000, cached_tokens=100_000,
+            thought_tokens=10_000, output_tokens=5_000, wall_clock_s=30.0,
+            passed=True, capacity_score=1.0, sandbox="bwrap",
+        ),
+    )
+
+    # Hydrogen base: api-1 passes, cli-1 fails; overlay flips cli-1 to PASS.
+    _write_trial(
+        w_h4_base,
+        RunMetrics(
+            task_id="api-1", task_rel="api/api-1", category="api", arm="sj",
+            model_id="gemini-4-hydrogen", steps=8, prompt_tokens=1_000_000, cached_tokens=900_000,
+            thought_tokens=40_000, output_tokens=10_000, wall_clock_s=30.0,
+            passed=True, capacity_score=1.0, sandbox="bwrap",
+        ),
+    )
+    _write_trial(
+        w_h4_base,
+        RunMetrics(
+            task_id="cli-1", task_rel="cli/cli-1", category="cli", arm="sj",
+            model_id="gemini-4-hydrogen", steps=9, prompt_tokens=1_000_000, cached_tokens=900_000,
+            thought_tokens=40_000, output_tokens=10_000, wall_clock_s=30.0,
+            passed=False, capacity_score=0.5, sandbox="bwrap",
+        ),
+    )
+    _write_trial(
+        w_h4_v2,
+        RunMetrics(
+            task_id="cli-1", task_rel="cli/cli-1", category="cli", arm="sj",
+            model_id="gemini-4-hydrogen", steps=7, prompt_tokens=1_000_000, cached_tokens=900_000,
+            thought_tokens=40_000, output_tokens=10_000, wall_clock_s=30.0,
+            passed=True, capacity_score=1.0, sandbox="bwrap",
+        ),
+    )
+
+    # Precomputed verdict JSON file.
+    verdict_json = tmp_path / "verdict.json"
+    verdict_json.write_text(
+        json.dumps(
+            {
+                "model": "gemini-3.7-flash",
+                "overall": {
+                    "hist_37": {
+                        "n": 2, "solved": 1, "solve_pct": 50.0, "macro_cap": 0.75,
+                        "steps": 30, "med_steps": 15.0, "wall_m": 4.0, "wall_h": 0.07,
+                    }
+                },
+                "by_category": {
+                    "api": {"hist_37": {"n": 1, "solved": 1, "solve_pct": 100.0, "macro_cap": 1.0}},
+                    "cli": {"hist_37": {"n": 1, "solved": 0, "solve_pct": 0.0, "macro_cap": 0.5}},
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    # Verify model-aware pricing:
+    # - 3.8 Flash api-1 sj: 200k uncached * 1.50 + 800k cached * 0.15 + 100k gen * 7.50 = 0.30 + 0.12 + 0.75 = $1.17
+    # - 4-Hydrogen api-1 sj: 100k uncached * 1.50 + 900k cached * 0.075 + 50k gen * 7.50 = 0.15 + 0.0675 + 0.375 = $0.5925
+    payload = compute_tabulation_payload(
+        [
+            f"3.7 Hist={verdict_json}:hist_37",
+            f"3.8 Paired={w_paired}",
+            f"4H Pre={w_h4_base}:sj",
+            f"4H Post={w_h4_base}+{w_h4_v2}:sj",
+        ]
+    )
+    by_lbl = {r["label"]: r for r in payload["runs"]}
+    assert set(by_lbl) == {"3.7 Hist", "3.8 Paired (raw)", "3.8 Paired (sj)", "4H Pre", "4H Post"}
+    assert by_lbl["3.8 Paired (sj)"]["overall"]["n"] == 3
+    assert by_lbl["4H Pre"]["overall"]["solved"] == 1
+    assert by_lbl["4H Post"]["overall"]["solved"] == 2
+    assert by_lbl["4H Post"]["overall"]["steps"] == 15  # 8 + 7 (overlay replaced 9 -> 7)
+    # 2 identical Hydrogen tasks -> 2 * $0.5925 = $1.185 -> rounded $1.19
+    assert by_lbl["4H Post"]["overall"]["cost_usd"] == pytest.approx(1.19, abs=0.01)
+    assert payload["pricing_per_1m"]["gemini-4-hydrogen"]["cached_input_usd"] == pytest.approx(0.075)
+    assert payload["pricing_per_1m"]["gemini-3.8-flash"]["cached_input_usd"] == pytest.approx(0.15)
+
+    # --common-tasks-only intersects directory runs on {'api-1', 'cli-1'}.
+    common_payload = compute_tabulation_payload(
+        [f"3.8 SJ={w_paired}:sj", f"4H Post={w_h4_base}+{w_h4_v2}:sj"],
+        common_tasks_only=True,
+    )
+    assert common_payload["common_task_count"] == 2
+    assert all(r["overall"]["n"] == 2 for r in common_payload["runs"])
+
+    # CLI end-to-end across table, markdown, csv, json + --output file write.
+    csv_out = tmp_path / "tab.csv"
+    rc = ab_cli.main(
+        [
+            "tabulate",
+            "--run", f"3.8 SJ={w_paired}:sj",
+            "--run", f"4H Post={w_h4_base}+{w_h4_v2}:sj",
+            "--format", "csv",
+            "--output", str(csv_out),
+        ]
+    )
+    assert rc == 0
+    csv_text = csv_out.read_text(encoding="utf-8")
+    rows = list(csv.DictReader(io.StringIO(csv_text)))
+    assert any(r["run"] == "4H Post" and r["slice"] == "overall" and r["solved"] == "2" for r in rows)
+    assert any(r["run"] == "4H Post" and r["slice"] == "cli" and r["solved"] == "1" for r in rows)
+
+    capsys.readouterr()
+    assert ab_cli.main(["tabulate", "--run", f"4H Post={w_h4_base}+{w_h4_v2}:sj", "--format", "markdown"]) == 0
+    md_out = capsys.readouterr().out
+    assert "| 4H Post | 2/2 (100.0%) |" in md_out and "### Category Breakdown" in md_out
+
+    assert ab_cli.main(["tabulate", "--run", f"4H Post={w_h4_base}+{w_h4_v2}:sj", "--format", "table"]) == 0
+    tbl_out = capsys.readouterr().out
+    assert "4H Post" in tbl_out and "2/2 (100.0%)" in tbl_out
+
+
+

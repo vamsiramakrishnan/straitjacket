@@ -14,6 +14,8 @@
     {"match": "gemini-4-neon",         "vendor": "google", "tier": "premium",  "in": 3.00, "out": 15.00, "cache_write": 3.00, "cache_read": 0.15,  "source": "https://cloud.google.com/model-garden/pricing"},
     {"match": "gemini-4-carbon",       "vendor": "google", "tier": "premium",  "in": 4.00, "out": 20.00, "cache_write": 4.00, "cache_read": 0.20,  "source": "https://cloud.google.com/model-garden/pricing"},
     {"match": "gemini-4-argon",        "vendor": "google", "tier": "premium",  "in": 4.00, "out": 20.00, "cache_write": 4.00, "cache_read": 0.20,  "source": "https://cloud.google.com/model-garden/pricing"},
+    {"match": "gemini-3.8-flash",      "vendor": "google", "tier": "standard", "in": 1.50, "out": 7.50,  "cache_write": 1.50, "cache_read": 0.15,  "source": "https://cloud.google.com/model-garden/pricing"},
+    {"match": "gemini-3.7-flash",      "vendor": "google", "tier": "standard", "in": 1.50, "out": 7.50,  "cache_write": 1.50, "cache_read": 0.15,  "source": "https://cloud.google.com/model-garden/pricing"},
     {"match": "gemini-3.6-flash",      "vendor": "google", "tier": "standard", "in": 1.25, "out": 7.50,  "cache_write": 1.25, "cache_read": 0.12,  "source": "https://ai.google.dev/gemini-api/docs/pricing"},
     {"match": "gemini-3.5-flash-lite", "vendor": "google", "tier": "economy",  "in": 0.20, "out": 1.20,  "cache_write": 0.20, "cache_read": 0.03,  "source": "https://ai.google.dev/gemini-api/docs/pricing"},
     {"match": "gemini-3.5-flash",      "vendor": "google", "tier": "standard", "in": 1.50, "out": 9.00,  "cache_write": 1.50, "cache_read": 0.15,  "source": "https://ai.google.dev/gemini-api/docs/pricing"},
