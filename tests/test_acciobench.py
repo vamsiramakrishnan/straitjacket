@@ -5910,3 +5910,98 @@ def test_wave5_deliverables_alibaba_slack_headphone_and_host_integration(
     res_vm_c = audit_deliverables(ws, ["outputs/merge_decisions.json"])
     assert res_vm_c.advisories == ()
 
+
+def test_hydrogen_sj_fixes_ports_cache_judge_stripe_and_schema(tmp_path: Path) -> None:
+    from ctx.deliverables import audit_deliverables
+    from ctx.residence import default_cache_read_ratio
+    from evals.acciobench.loop import _interpret_reward
+    from evals.acciobench.ports import CompiledPortMap
+
+    # 1. Quoted positional ports in start_one "slack" "9110" must rewrite cleanly.
+    pm = CompiledPortMap({9110: 22701, 9103: 22700})
+    script = 'start_one "slack" "9110" "$F1"\nstart_one "contacts" "9103" "$F2"\n'
+    rw = pm.rewrite(script, is_service_script=True)
+    assert 'start_one "slack" "22701"' in rw
+    assert 'start_one "contacts" "22700"' in rw
+
+    # 2. Gemini 4 models use 0.05 cache_read_ratio (95% discount); Gemini 3.x uses 0.10.
+    assert default_cache_read_ratio("gemini-4-hydrogen") == 0.05
+    assert default_cache_read_ratio("gemini-4-argon") == 0.05
+    assert default_cache_read_ratio("gemini-3.8-flash") == 0.10
+    assert default_cache_read_ratio("gemini-3.7-flash") == 0.10
+
+    # 3. _interpret_reward must reject LLM judge infra failures as grading errors.
+    with pytest.raises(ValueError, match="grader LLM judge failed"):
+        _interpret_reward(
+            {
+                "score": 0.5,
+                "checks_passed": 5,
+                "checks_total": 10,
+                "checks_breakdown": [
+                    {"id": "llm_check", "passed": False, "reason": "llm call failed: unsupported judge provider: vertex"}
+                ],
+            }
+        )
+
+    # 4. _stripe_trigger_requested allows dotted Stripe events like 'Trigger payment_intent.succeeded'.
+    host, _, run_dir, _ = _make_host(tmp_path / "stripe_trig", arm="sj")
+    (run_dir / "workspace").mkdir(parents=True, exist_ok=True)
+    (run_dir / "workspace" / "integration_spec.md").write_text(
+        "**B — Trigger payment_intent.succeeded.**\n**C — Trigger checkout.session.completed.**\n",
+        encoding="utf-8",
+    )
+    assert host._stripe_trigger_requested() is True
+    assert host._check_bash_entry_gate("stripe trigger payment_intent.succeeded") is None
+
+    # 5. Live form schema (countryPriceDiff + attr_material maxlength=50) & cross-file decision vs matrix CSV.
+    ws = tmp_path / "schema_ws"
+    out = ws / "outputs"
+    out.mkdir(parents=True)
+    pub = out / "submission.json"
+    pub.write_text(
+        json.dumps(
+            {
+                "countryPriceDiff": {"United States": {"code": "US", "markup": "0%"}},
+                "attr_material": "100% TPE (Thermoplastic Elastomer, SGS certified; no PVC; no phthalates)",
+            }
+        ),
+        encoding="utf-8",
+    )
+    res_pub = audit_deliverables(ws, ["outputs/submission.json"])
+    assert any("countryPriceDiff" in a for a in res_pub.advisories)
+    assert any("attr_material" in a for a in res_pub.advisories)
+
+    # Valid flat {mode, prices} and concise attr_material passes cleanly.
+    pub.write_text(
+        json.dumps(
+            {
+                "countryPriceDiff": {"mode": "percent", "prices": {"US": ["0", "0"], "BR": ["8", "8"]}},
+                "attr_material": "100% TPE",
+            }
+        ),
+        encoding="utf-8",
+    )
+    res_pub_ok = audit_deliverables(ws, ["outputs/submission.json"])
+    assert res_pub_ok.advisories == ()
+
+    # Cross-file decision vs matrix CSV catches excluded SKUs present in matrix CSV.
+    (out / "candidate_decisions.json").write_text(
+        json.dumps(
+            {
+                "candidate_decisions": [
+                    {"candidate_sku": "SKU-A", "decision": "include"},
+                    {"candidate_sku": "SKU-B", "decision": "include"},
+                    {"candidate_sku": "SKU-C", "decision": "reject_standalone"},
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    (out / "variation_matrix.csv").write_text(
+        "sku,color\nSKU-A,Black\nSKU-B,Blue\nSKU-C,Pink\n",
+        encoding="utf-8",
+    )
+    res_mat = audit_deliverables(ws, ["outputs/candidate_decisions.json", "outputs/variation_matrix.csv"])
+    assert any("SKU-C" in a and "variation_matrix.csv" in a for a in res_mat.advisories)
+
+

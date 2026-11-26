@@ -1425,6 +1425,8 @@ class ToolHost:
                 return True
             if "standard triggers" in low and "events_total" in low:
                 return True
+            if re.search(r"\btrigger\s+[a-z][a-z0-9_]*\.[a-z0-9_.]+\b", low):
+                return True
         return False
 
     def _check_bash_entry_gate(self, cmd_rw: str) -> str | None:
@@ -2400,7 +2402,7 @@ class ToolHost:
                 for pid, pd in prod_rows
                 if str(pd.get("name") or "").strip().lower() == "myproduct"
             ]
-            if myprods:
+            if myprods and not self._stripe_trigger_requested():
                 issues.append(
                     f"Stripe contains synthetic 'myproduct' fixture pollution ({', '.join(myprods[:4])}) "
                     "created by `stripe trigger`; delete the synthetic 'myproduct' product(s) and any "
@@ -3057,6 +3059,61 @@ class ToolHost:
                     _add_issue(
                         f"NovaCast P5 Pro ({src_label}) has empty or invalid image slot(s) {', '.join(empty_or_bad)}; "
                         "upload all 5 valid projector images (IMG_20260610_001.jpg, 003, 005, 008, 011) to image_1..image_5."
+                    )
+
+            # (v) General live form schema checks: countryPriceDiff {mode, prices} & short attr_* maxlength=50
+            if "countryPriceDiff" in fmap:
+                cpd = self._maybe_json(fmap.get("countryPriceDiff"))
+                if isinstance(cpd, dict) and cpd:
+                    mode_v = str(cpd.get("mode") or "").strip().lower()
+                    prices_v = cpd.get("prices")
+                    if mode_v not in ("percent", "offset", "direct") or not isinstance(prices_v, dict):
+                        _add_issue(
+                            f"Commerce/Alibaba countryPriceDiff ({src_label}) does not match the live form schema "
+                            "{'mode': 'percent'|'offset'|'direct', 'prices': {'<ISO2_CODE>': [<tier_values>]}} "
+                            "(do not submit nested country metadata dicts or full country-name maps); "
+                            "update countryPriceDiff in both the live server state and JSON output."
+                        )
+                    else:
+                        bad_keys = [
+                            str(ck) for ck in prices_v.keys() if not re.match(r"^[A-Z]{2,3}$", str(ck).strip())
+                        ]
+                        if bad_keys:
+                            _add_issue(
+                                f"Commerce/Alibaba countryPriceDiff.prices ({src_label}) uses non-ISO country key(s) "
+                                f"{bad_keys[:4]!r}; use 2-letter ISO country codes (e.g. 'US', 'DE', 'GB', 'BR')."
+                            )
+                        flat_vals: list[str] = []
+                        for pv in prices_v.values():
+                            if isinstance(pv, list):
+                                flat_vals.extend(str(x).strip() for x in pv if str(x).strip() != "")
+                            elif pv is not None and str(pv).strip() != "":
+                                flat_vals.append(str(pv).strip())
+                        if flat_vals and all(re.match(r"^[+-]?0(?:\.0+)?%?$", v) for v in flat_vals):
+                            if re.search(r"[+-]\s*[1-9]\d*(?:\.\d+)?%", self.task_markdown or ""):
+                                _add_issue(
+                                    f"Commerce/Alibaba countryPriceDiff.prices ({src_label}) has all-zero values "
+                                    f"while the specification contains non-zero country percentage markups/surcharges; "
+                                    "populate the non-zero tier values for each country."
+                                )
+
+            if "regionSurcharge" in fmap:
+                rs = self._maybe_json(fmap.get("regionSurcharge"))
+                if isinstance(rs, dict) and rs and any(isinstance(v, dict) for v in rs.values()):
+                    _add_issue(
+                        f"Commerce/Alibaba regionSurcharge ({src_label}) uses nested dict values; "
+                        "verify it matches the expected flat region-to-surcharge mapping."
+                    )
+
+            for ak in ("attr_material", "attr_diameter"):
+                if ak not in fmap:
+                    continue
+                av = str(fmap.get(ak) or "").strip()
+                if len(av) > 50 or (len(av) > 36 and ("(" in av or ";" in av)):
+                    _add_issue(
+                        f"Commerce/Alibaba short attribute '{ak}' ({src_label}) is overly verbose ({len(av)} chars, "
+                        "HTML maxlength=50); use the concise datasheet material/dimension value without extra "
+                        "parenthetical commentary or certification notes."
                     )
 
         delta_parts.append(f"commerce_sources={len(sources)}")

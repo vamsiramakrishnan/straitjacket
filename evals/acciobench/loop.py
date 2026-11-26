@@ -23,7 +23,7 @@ from ctx.deliverables import (  # noqa: E402
     extract_declared_deliverables,
     format_deliverable_contract,
 )
-from ctx.residence import WatermarkResidence  # noqa: E402
+from ctx.residence import WatermarkResidence, default_cache_read_ratio  # noqa: E402
 
 from .browser import BrowserPool, BrowserSession  # noqa: E402
 from .config import (  # noqa: E402
@@ -289,6 +289,13 @@ def _interpret_reward(data: Any) -> tuple[float, int, int, list[dict[str, Any]]]
         breakdown = []
     if not isinstance(breakdown, list) or not all(isinstance(c, dict) for c in breakdown):
         raise ValueError("reward.json 'checks_breakdown' is not a list of objects")
+    for chk in breakdown:
+        if not chk.get("passed"):
+            reason_l = str(chk.get("reason") or "").lower()
+            if "unsupported judge provider" in reason_l or "llm call failed:" in reason_l:
+                raise ValueError(
+                    f"grader LLM judge failed on {chk.get('id')!r}: {str(chk.get('reason') or '')[:_MAX_VERIFIER_ERR_CHARS]}"
+                )
     return float(score or 0.0), cp_i, ct_i, breakdown
 
 
@@ -631,7 +638,12 @@ def run_trial(
         )
 
         residence: WatermarkResidence | None = (
-            WatermarkResidence(is_mutating_call=is_mutating_tool_call) if is_sj else None
+            WatermarkResidence(
+                is_mutating_call=is_mutating_tool_call,
+                cache_read_ratio=default_cache_read_ratio(config.model),
+            )
+            if is_sj
+            else None
         )
         requires_network = _task_requires_network(spec)
         tools = build_tools(

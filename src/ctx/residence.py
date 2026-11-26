@@ -41,8 +41,22 @@ __all__ = [
     "_extract_state_notes_from_part",
     "_inject_compaction_recap",
     "_is_fact_bearing_state_note",
+    "default_cache_read_ratio",
     "extract_mutation_receipts",
 ]
+
+
+def default_cache_read_ratio(model_id: str) -> float:
+    """Return the provider cached-input/uncached-input price ratio for ``model_id``.
+
+    Gemini 4 models bill cached input at 5% of uncached input (95% discount,
+    e.g. ``$0.075 / $1.50`` for Hydrogen, ``$0.20 / $4.00`` for Argon/Carbon,
+    ``$0.15 / $3.00`` for Neon); Gemini 3.x models bill at 10% (90% discount).
+    """
+    low = (model_id or "").strip().lower()
+    if any(tok in low for tok in ("gemini-4", "hydrogen", "argon", "neon", "carbon")):
+        return 0.05
+    return 0.10
 
 _UI_CONTROLS_RE = re.compile(
     r"(=== Interactive Elements \(\d+\) ===\n).*?(\n\n=== Visible Page Text ===\n)",
