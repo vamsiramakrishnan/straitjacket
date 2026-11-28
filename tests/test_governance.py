@@ -322,7 +322,7 @@ def test_antigravity_registration_matches_the_table():
         wants_post = post_route not in ("exempt",) and kind not in ("edit", "skill")
         assert (name in post) is wants_post, name
     assert "mcp__.*" in post
-    assert pre - set(table) == set() and post - set(table) - {"mcp__.*"} == set()
+    assert pre - set(table) == set() and post - set(table) - {"mcp__.*", "mcp_.*"} == set()
     # Antigravity's documented file tools (hooks reference, supported tools).
     assert {"view_file", "multi_replace_file_content", "list_dir"} <= pre
 

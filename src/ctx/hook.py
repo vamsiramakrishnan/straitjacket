@@ -588,6 +588,11 @@ def _policy_cache_key(paths: list[str]) -> list[list[Any]]:
     return key
 
 
+def _env_flag(name: str) -> bool:
+    """True when environment variable ``name`` is set to a truthy toggle."""
+    return os.environ.get(name, "").strip().lower() in ("1", "true", "yes")
+
+
 def _load_guard_policy(workspace_root: str | None) -> dict[str, Any]:
     """Minimal ctx.toml read for the guard section, plus the compiled
     ctx-policy.toml learned-policy epoch. Never raises.
@@ -598,9 +603,15 @@ def _load_guard_policy(workspace_root: str | None) -> dict[str, Any]:
     hashing the small policy sources is the correctness cost on cache hits.
     The cache is a pure derivation of the TOMLs — deleting it is always safe.
     """
+    env_unknown = os.environ.get("CTX_GUARD_UNKNOWN_COMMAND", "").strip().lower()
+    default_unknown = (
+        env_unknown
+        if env_unknown in ("allow", "deny", "ask", "force_ask")
+        else "force_ask"
+    )
     policy: dict[str, Any] = {
         "mode": "guarded",
-        "unknown_command": "force_ask",
+        "unknown_command": default_unknown,
         "internal_error": "allow",
         "steering": "auto",
         "collapse": True,  # replacement surface (default posture): substitute loop-shapes with collapsed ctx ops; set guard.collapse=false to break-glass off
@@ -642,7 +653,7 @@ def _load_guard_policy(workspace_root: str | None) -> dict[str, Any]:
     if not path_is_file and not ppath_is_file:
         return policy
     cache_path = session_reads_dir(workspace_root, _POLICY_CACHE_NAME)
-    key = _policy_cache_key([path, ppath])
+    key = _policy_cache_key([path, ppath]) + [["env:unknown_command", default_unknown]]
     try:
         with open(cache_path, encoding="utf-8") as fh:
             doc = json.load(fh)
@@ -1480,15 +1491,62 @@ def _in_double_quotes(stripped: str, at: int) -> bool:
 _CTX_MCP_SERVERS = frozenset({"ctx", "ctx-harness", "ctx_harness",
                               "plugin_ctx-harness_ctx", "plugin_ctx_harness_ctx",
                               "plugin_ctx-harness_ctx-harness"})
+_CTX_MCP_TOOL_NAMES = frozenset({"ctx", "ctx_edit"})
+
+
+def _ctx_mcp_servers() -> frozenset[str]:
+    extra = os.environ.get("CTX_MCP_SELF_SERVERS", "")
+    if not extra:
+        return _CTX_MCP_SERVERS
+    added = {tok.strip() for tok in extra.split(",") if tok.strip()}
+    return _CTX_MCP_SERVERS | added if added else _CTX_MCP_SERVERS
 
 
 def _is_ctx_mcp_tool(name: str) -> bool:
     if name == "ctx":  # the ctx-owned Antigravity SDK host's own tool
         return True
-    if not name.startswith("mcp__"):
+    servers = _ctx_mcp_servers()
+    if name.startswith("mcp__"):
+        server, sep, tool = name[5:].partition("__")
+        return bool(sep and tool) and server in servers
+    if name.startswith("mcp_"):
+        body = name[4:]
+        for tool in _CTX_MCP_TOOL_NAMES:
+            suffix = "_" + tool
+            if body.endswith(suffix) and body.removesuffix(suffix) in servers:
+                return True
+    return False
+
+
+def _is_ctx_mcp_call(payload: dict[str, Any]) -> bool:
+    """True if this hook payload invokes ctx's own MCP server (directly or via
+    a generic ``call_mcp_tool`` dispatcher)."""
+    tool_name = str(payload.get("tool_name") or payload.get("toolName") or "")
+    if _is_ctx_mcp_tool(tool_name):
+        return True
+    if tool_name != "call_mcp_tool":
         return False
-    server, sep, tool = name[5:].partition("__")
-    return bool(sep and tool) and server in _CTX_MCP_SERVERS
+    args = payload.get("tool_input") or payload.get("toolInput") or {}
+    if not isinstance(args, dict):
+        return False
+    server = str(
+        args.get("ServerName")
+        or args.get("server_name")
+        or args.get("serverName")
+        or args.get("server")
+        or ""
+    )
+    if server not in _ctx_mcp_servers():
+        return False
+    target_tool = str(
+        args.get("ToolName")
+        or args.get("tool_name")
+        or args.get("toolName")
+        or args.get("tool")
+        or args.get("name")
+        or ""
+    )
+    return not target_tool or target_tool in _CTX_MCP_TOOL_NAMES
 
 
 def _which(name: str) -> str | None:
@@ -1510,6 +1568,15 @@ def _self_ctx_paths() -> set[str]:
         found = _which("ctx")
         if found:
             out.add(os.path.realpath(found))
+        extra = os.environ.get("CTX_EXTRA_SELF_PATHS", "")
+        if extra:
+            for item in extra.split(os.pathsep):
+                item = item.strip()
+                if item:
+                    out.add(os.path.realpath(os.path.expanduser(item)))
+        rewrite_bin = os.environ.get("CTX_REWRITE_BIN", "").strip()
+        if rewrite_bin and rewrite_bin != "ctx":
+            out.add(os.path.realpath(os.path.expanduser(rewrite_bin)))
     except Exception:
         pass
     return out
@@ -2717,6 +2784,42 @@ def _brace_alternatives(word: str, limit: int = 64) -> list[str] | None:
 #: socket); inside the workspace (links resolved); inside a directory the
 #: host handed this session (its tool-results directory, the scratchpad the
 #: payload names); anything else is outside.
+def _allowed_outside_read_prefix(real_path: str) -> bool:
+    """True when ``real_path`` sits under an explicit non-root, non-home
+    directory listed in ``CTX_ALLOW_OUTSIDE_READ_PREFIXES``.
+
+    Always evaluated *after* secret-path and non-regular-file checks, so
+    credential paths and devices remain guarded regardless of prefix."""
+    raw = os.environ.get("CTX_ALLOW_OUTSIDE_READ_PREFIXES", "")
+    if not raw:
+        return False
+    home = _account_home()
+    home_real = os.path.abspath(os.path.realpath(home)) if home else ""
+    for entry in raw.split(os.pathsep):
+        entry = entry.strip()
+        if not entry:
+            continue
+        try:
+            norm = os.path.abspath(os.path.realpath(os.path.expanduser(entry)))
+        except (OSError, ValueError):
+            continue
+        parts = [p for p in norm.split(os.sep) if p]
+        if len(parts) < 2:
+            continue  # refuse `/` or single top-level directory
+        if home_real and _is_ancestor_or_same(norm, home_real):
+            continue  # refuse home itself or any ancestor of home
+        if real_path == norm or real_path.startswith(norm + os.sep):
+            return True
+    return False
+
+
+def _passthrough_filenames() -> frozenset[str]:
+    raw = os.environ.get("CTX_PASSTHROUGH_FILENAMES", "")
+    if not raw:
+        return frozenset()
+    return frozenset(tok.strip() for tok in raw.split(",") if tok.strip())
+
+
 def _read_path_class(path_abs: str, root: str | None,
                      trusted: dict[str, Any] | None = None) -> str | None:
     """``secret``, ``not_file``, ``outside`` or None for an ordinary read.
@@ -2743,6 +2846,8 @@ def _read_path_class(path_abs: str, root: str | None,
     if not top or real == top or real.startswith(top + os.sep):
         return None
     if trusted and _in_trusted_dir(path_abs, trusted):
+        return None
+    if _allowed_outside_read_prefix(real):
         return None
     return "outside"
 
@@ -3915,6 +4020,43 @@ def _skeleton_outline_for(path_str: str, workspace_root: str | None, size: int,
         return None
 
 
+_MARKDOWN_SUFFIXES = (".md", ".markdown", ".mdx")
+
+
+def _markdown_outline_for(
+    path_str: str,
+    workspace_root: str | None,
+    size: int,
+    policy: dict[str, Any],
+    range_hint: str = "Read with offset and limit",
+) -> str | None:
+    """ATX heading map for a whole-file read of a large Markdown document,
+    mirroring :func:`_skeleton_outline_for` for source code. Fail-open."""
+    if not path_str.lower().endswith(_MARKDOWN_SUFFIXES):
+        return None
+    try:
+        from ctx.digest.mdprof import outline_file
+
+        outline = outline_file(path_str, _redaction_policy(policy))
+        if not outline:
+            return None
+        repo_hint = ""
+        if workspace_root:
+            try:
+                rel = os.path.relpath(path_str, workspace_root).replace(os.sep, "/")
+                if not rel.startswith(".."):
+                    repo_hint = f" or ctx get repo:{rel} --lines A:B"
+            except ValueError:
+                pass
+        return (
+            f"CTX_CONTEXT_GUARD: whole-file read of a {size:,}-byte markdown file "
+            f"(~{size // 4:,} tok). Its section outline is below instead of the first "
+            f"page; read what you need by range ({range_hint}){repo_hint}.\n" + outline
+        )
+    except Exception:
+        return None
+
+
 #: Antigravity's view_file takes a line range, not offset/limit (hooks
 #: reference, supported tools: "AbsolutePath, StartLine (optional), EndLine
 #: (optional)"). A read in that style is bounded by its own range, and any
@@ -4355,6 +4497,8 @@ def classify_read(
         return _force_ask(_OUTSIDE_READ_REASON)
     if path_class == "not_file":
         return _force_ask(_NOT_FILE_READ_REASON)
+    if os.path.basename(path_str) in _passthrough_filenames():
+        return dict(DECISION_ALLOW)
     # Media reads (ctx.mediaread). Only past the secret and workspace checks
     # above, so a media decision can never reach a file the guard refuses;
     # decided from the suffix alone before any system call, so a source-file
@@ -4402,6 +4546,9 @@ def classify_read(
         if not in_ledger and _whole_file_read(tool_input):
             outline = _skeleton_outline_for(path_str, workspace_root, size,
                                             "view_file with StartLine and EndLine")
+            if not outline:
+                outline = _markdown_outline_for(path_str, workspace_root, size, policy,
+                                                "view_file with StartLine and EndLine")
             if outline:
                 return _deny(outline)
         # The requested start is kept (1 for a whole-file read): serving a
@@ -4411,9 +4558,13 @@ def classify_read(
                              size, limit, window, note)
     if size > limit:
         if not in_ledger and _whole_file_read(tool_input):
+            range_hint = ("view_file with StartLine and EndLine"
+                          if _range_style(tool_input) else "Read with offset and limit")
             outline = _skeleton_outline_for(
                 path_str, workspace_root, size,
                 *(("view_file with StartLine and EndLine",) if _range_style(tool_input) else ()))
+            if not outline:
+                outline = _markdown_outline_for(path_str, workspace_root, size, policy, range_hint)
             if outline:
                 # A deny whose reason IS the answer: the outline reaches the
                 # model as the tool's text on every host, and no rewrite is
@@ -5570,6 +5721,24 @@ def _agy_overwrite(decision: dict[str, Any], payload: dict[str, Any] | None,
     return out
 
 
+def _apply_rewrite_bin(emitted: dict[str, Any]) -> dict[str, Any]:
+    """Substitute bare leading ``ctx `` with ``CTX_REWRITE_BIN`` when set."""
+    rewrite_bin = os.environ.get("CTX_REWRITE_BIN", "").strip()
+    if not rewrite_bin or rewrite_bin == "ctx":
+        return emitted
+    quoted = shlex.quote(rewrite_bin)
+    ow = emitted.get("overwrite")
+    if isinstance(ow, dict):
+        for key in ("CommandLine", "command"):
+            cmd = ow.get(key)
+            if isinstance(cmd, str) and cmd.startswith("ctx "):
+                ow[key] = f"{quoted} {cmd[4:]}"
+    reason = emitted.get("reason")
+    if emitted.get("decision") == "deny" and isinstance(reason, str):
+        emitted["reason"] = reason.replace("Re-run it as: ctx ", f"Re-run it as: {quoted} ")
+    return emitted
+
+
 def _to_antigravity_schema(decision: dict[str, Any], payload: dict[str, Any] | None = None,
                            ws_root: str | None = None) -> dict[str, Any]:
     """Layer 2 for the antigravity dialect.
@@ -5586,7 +5755,7 @@ def _to_antigravity_schema(decision: dict[str, Any], payload: dict[str, Any] | N
     if isinstance(rewrite, dict) and isinstance(rewrite.get("updatedInput"), dict):
         sent = _agy_overwrite(decision, payload, ws_root)
         if sent is not None:
-            return sent
+            return _apply_rewrite_bin(sent)
         decision["_agy_sent"] = "deny"
         reason = str(rewrite.get("reason", "")).strip()
         cmd = str(rewrite.get("command", "")).strip()
@@ -5604,7 +5773,7 @@ def _to_antigravity_schema(decision: dict[str, Any], payload: dict[str, Any] | N
             reason = _APPLIED_BOUND_RE.sub(".", reason).replace("..", ".")
             reason = (f"{reason} Not applied: this host cannot rewrite this tool's "
                       f"arguments; re-issue the call with {caps or 'a bound'}.").strip()
-        return {"decision": "deny", "reason": reason or "run this through ctx"}
+        return _apply_rewrite_bin({"decision": "deny", "reason": reason or "run this through ctx"})
     raw = decision.get("decision", "allow")
     out: dict[str, Any] = {
         "decision": raw if raw in _AGY_PRE_DECISIONS else "allow",
@@ -6038,9 +6207,8 @@ def _gate_failure_digest(
         try:
             import hashlib
 
-            rel = os.path.join(_LEDGER_DIR_NAME, _GATE_FALLBACK_DIR)
-            spill_dir = os.path.join(ws_root, rel)
-            os.makedirs(spill_dir, exist_ok=True)
+            spill_dir = session_reads_dir(ws_root, _GATE_FALLBACK_DIR)
+            os.makedirs(spill_dir, mode=0o700, exist_ok=True)
             name = hashlib.sha256(data).hexdigest()[:12] + ".txt"
             path = os.path.join(spill_dir, name)
             if not os.path.exists(path):
@@ -6048,7 +6216,9 @@ def _gate_failure_digest(
                 with open(tmp, "wb") as fh:
                     fh.write(data)
                 os.replace(tmp, path)
-            handle = "read " + os.path.join(rel, name)
+            ws_prefix = ws_root.rstrip(os.sep) + os.sep
+            shown = path[len(ws_prefix):] if path.startswith(ws_prefix) else path
+            handle = "read " + shown
         except Exception as inner:
             _note_guard_failure(ws_root, op="emission_gate", stage="fallback-spill", exc=inner)
 
@@ -6655,6 +6825,45 @@ def _host_full_output(payload: dict[str, Any], tr: dict[str, Any]) -> str | None
     return data.decode("utf-8", "replace")
 
 
+def _has_nonempty_tool_result(payload: dict[str, Any]) -> bool:
+    """True when a PostToolUse payload actually carries a non-empty result."""
+    for key in _RESPONSE_KEYS:
+        val = payload.get(key)
+        if isinstance(val, str) and val:
+            return True
+        if isinstance(val, (dict, list)) and val:
+            return True
+    return False
+
+
+def _effective_output_substitution(
+    flavor: str, payload: dict[str, Any] | None = None
+) -> bool:
+    """Whether this invocation can substitute PostToolUse tool output.
+
+    Respects the static dialect table first, plus the opt-in
+    ``CTX_ANTIGRAVITY_OVERWRITE_RESULT`` toggle for Antigravity hosts whose
+    PostToolUse contract delivers the tool result and accepts
+    ``{"overwriteResult": ...}``.
+    """
+    if can_substitute_output(flavor):
+        return True
+    if flavor == "antigravity" and _env_flag("CTX_ANTIGRAVITY_OVERWRITE_RESULT"):
+        return payload is None or _has_nonempty_tool_result(payload)
+    return False
+
+
+def _read_target_basename(payload: dict[str, Any]) -> str:
+    ti = payload.get("tool_input") or payload.get("toolInput") or {}
+    if not isinstance(ti, dict):
+        return ""
+    for key in ("AbsolutePath", "TargetFile", "file_path", "filePath", "path", "Path"):
+        val = ti.get(key)
+        if isinstance(val, str) and val:
+            return os.path.basename(val)
+    return ""
+
+
 def _emission_gate(payload: dict[str, Any], flavor: str, reserve: int = 0) -> str | None:
     """The universal output-side gate. When a tool result exceeds the byte
     budget, persist it losslessly and return a bounded digest (with a working
@@ -6689,7 +6898,7 @@ def _emission_gate(payload: dict[str, Any], flavor: str, reserve: int = 0) -> st
     that travels with it), returned as the note, and the fitted result is
     left in ``_GATE_STATS["window"]`` for the caller to send.
     """
-    can_substitute = can_substitute_output(flavor)
+    can_substitute = _effective_output_substitution(flavor, payload)
     _GATE_STATS.clear()
 
     # -- phase 1: is there anything to gate at all? Pure and cheap; a failure
@@ -6743,10 +6952,19 @@ def _emission_gate(payload: dict[str, Any], flavor: str, reserve: int = 0) -> st
     # The header alone is not trusted: tool output can begin with "[ctx " too,
     # and a flood that does would pass ungated. It counts only when ctx is
     # what ran (a ctx MCP tool, or a shell command whose program is ctx).
-    if _is_ctx_mcp_tool(tool_name) or (
+    if _is_ctx_mcp_call(payload) or (
         stdout.lstrip().startswith(("[ctx ", "densified:")) and _ran_ctx(payload)
     ):
         _GATE_STATS["decision"] = "ctx_output"
+        return None
+
+    passthrough = _passthrough_filenames()
+    if (
+        passthrough
+        and _tool_kind(tool_name, flavor, payload) == "read"
+        and _read_target_basename(payload) in passthrough
+    ):
+        _GATE_STATS["decision"] = "passthrough"
         return None
 
     # -- phase 2: budget. A broken policy read degrades to the built-in
@@ -6973,11 +7191,26 @@ def main_session_start(flavor: str = "antigravity") -> int:
             if advisory else {}
         )
     else:
-        # PreInvocation: ephemeral, so per-call text does not accumulate in
-        # the transcript (https://antigravity.google/docs/hooks).
-        emitted = (
-            {"injectSteps": [{"ephemeralMessage": advisory}]} if advisory else {}
-        )
+        # PreInvocation: ephemeral by default, so per-call text does not
+        # accumulate in the transcript (https://antigravity.google/docs/hooks).
+        # Hosts that prefer hidden systemMessage steps opt in via
+        # CTX_PRE_INVOCATION_STEP_FORMAT=system_message.
+        step_fmt = os.environ.get("CTX_PRE_INVOCATION_STEP_FORMAT", "").strip().lower()
+        if not advisory:
+            emitted = {}
+        elif step_fmt == "system_message":
+            emitted = {
+                "injectSteps": [
+                    {
+                        "systemMessage": {
+                            "systemMessage": advisory,
+                            "renderInfo": {"hidden": True},
+                        }
+                    }
+                ]
+            }
+        else:
+            emitted = {"injectSteps": [{"ephemeralMessage": advisory}]}
     sys.stdout.write(json.dumps(emitted, sort_keys=True))
     sys.stdout.write("\n")
     sys.stdout.flush()
@@ -7185,13 +7418,14 @@ def main_post_tool_use(flavor: str = "antigravity") -> int:
         if len(chso) > 1:
             emitted["hookSpecificOutput"] = chso
     else:
-        # Antigravity's published PostToolUse contract has exactly one legal
-        # output: {}. It can neither replace the result nor attach a nudge, so
-        # this hook is observational here — the bytes are still captured into
-        # the store above (that is what keeps `ctx get` able to resolve them
-        # later), but the transcript is left exactly as the host wrote it.
-        # Containment on this host happens at PreToolUse or not at all.
-        emitted = {}
+        # Antigravity's published PostToolUse contract has only {} by default,
+        # so the gate captures into the store and leaves the transcript alone.
+        # Hosts that accept {"overwriteResult": ...} opt in via
+        # CTX_ANTIGRAVITY_OVERWRITE_RESULT=1.
+        if replacement is not None and _env_flag("CTX_ANTIGRAVITY_OVERWRITE_RESULT"):
+            emitted = {"overwriteResult": replacement}
+        else:
+            emitted = {}
     sys.stdout.write(json.dumps(emitted, sort_keys=True))
     sys.stdout.write("\n")
     sys.stdout.flush()
@@ -7511,7 +7745,7 @@ def main_pre_tool_use(flavor: str = "antigravity") -> int:
             # Runtime dialect capability, never cached in the repo policy.
             # Only hosts that can replace PostToolUse output may take the
             # speculative-native fast path.
-            policy["_output_substitution"] = can_substitute_output(flavor)
+            policy["_output_substitution"] = _effective_output_substitution(flavor)
             # Which host's native-tool table classifies this call.
             policy["_flavor"] = flavor
         except Exception as exc:

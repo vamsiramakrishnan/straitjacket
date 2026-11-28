@@ -37,6 +37,7 @@ ALLOWED: dict[tuple[str, str], str] = {
     ("digest/traceprof.py", "body[:k]"): "frame parsing: function name before '(', then quoted by the Quoter",
     ("digest/traceprof.py", 's[: s.rfind("(")]'): "frame parsing, then quoted by the Quoter",
     ("digest/udiffprof.py", "s[:cap]"): "line classification prefix (LINE_EXAMINE_CAP), never rendered",
+    ("digest/mdprof.py", "line[:LINE_EXAMINE_CAP]"): "line classification prefix (LINE_EXAMINE_CAP), never rendered",
     ("digest/udiffprof.py", "s[:-1]"): "drops a trailing CR",
     ("digest/udiffprof.py", 'body[: -len(" differ")]'): "parsing 'Binary files ... differ', then quoted by the Quoter",
     ("digest/moreprofs.py", "ctx.stdout.text[:4000]"): "detection probe, never rendered",
