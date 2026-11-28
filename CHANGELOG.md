@@ -6,11 +6,34 @@ with a minor bump per mechanism wave (see CONTRIBUTING.md).
 
 ## [Unreleased]
 
-## [0.5.0] - 2026-11-22 (PyPI release)
+## [0.5.0] - 2026-11-28 (PyPI release)
 
 Install this release with `python -m pip install 'ctx-harness==0.5.0'`.
 Python version ordering places the previously published 0.44.0 above 0.5.0.
 
+- Pure-stdlib knowledge-work digest profiles across documents, spreadsheets,
+  presentations, databases, archives, notebooks, markup, configs, and
+  communications: `markdown/v1`, universal `delimited/v1`, `ooxml/v1` (`.docx`,
+  `.xlsx`, `.pptx`, `.odt`, `.ods`, `.odp`, `.epub`), `sqlite/v1`,
+  `archive/v1` (`.zip`, `.whl`, `.jar`, `.tar`, `.tar.gz`, `.gz`),
+  `notebook/v1` (`.ipynb` stripping inline base64 images while surfacing
+  tracebacks), `markup/v1` (HTML/XML/SVG/RSS stripping scripts and styles),
+  `config/v1` (YAML including multi-doc Kubernetes manifests, TOML, INI, HCL,
+  SQL, Protobuf, GraphQL), and `comm/v1` (`.eml`, `.mbox`, `.ics`, `.vcf`,
+  `.srt`, `.vtt`).
+- Unified `ctx get --part` CLI flag and MCP `selector.part` retrieval
+  (`sheet:`, `section:`, `slide:`, `slides:`, `cell:`, `cells:`, `table:`,
+  `member:`, `comments`, `changes`) with pre-slice multiline secret redaction,
+  within-block and cross-block continuation pagination, sparse XLSX row
+  coordinate preservation, and whole-file `PreToolUse` structural outlines for
+  binary containers and large knowledge-work files.
+- Generic host and plugin `CTX_*` environment contracts
+  (`CTX_PRIVATE_LEDGERS_ALL`, `CTX_PRIVATE_LEDGER_PREFIXES`,
+  `CTX_GUARD_UNKNOWN_COMMAND`, `CTX_ALLOW_OUTSIDE_READ_PREFIXES`,
+  `CTX_PASSTHROUGH_FILENAMES`, `CTX_EXTRA_SELF_PATHS`, `CTX_REWRITE_BIN`,
+  `CTX_MCP_SELF_SERVERS`, `CTX_ANTIGRAVITY_OVERWRITE_RESULT`,
+  `CTX_PRE_INVOCATION_STEP_FORMAT`), native MCP `_meta` workspace resolution,
+  and embedded-Python `_self_ctx_paths()` safety.
 - `ctx orchestrate --dry-run` and confirmation previews now plan locally for
   general tasks. Execution can still ask a coordinator model to refine the
   route. Automatic coordination selects an unattended host.
@@ -22,6 +45,8 @@ Python version ordering places the previously published 0.44.0 above 0.5.0.
 - `ctx compress --cache-prefix` now hashes the prefix bytes it emits after
   applying the configured redaction policy. The serialized prompt uses the
   same visible evidence as the standalone result.
+- Added multi-run `acciobench tabulate`, reproducible cache/context A/B
+  evaluation, and explicit Gemini 3.7/3.8/4 pricing rows.
 - The docs homepage shows how to pass a captured run between workers, with
   guides to delegation, code search, prompt caching, skills and model selection.
 - The [decision-model evaluation](evals/decision-models-2026-11-15.md) reports
