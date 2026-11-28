@@ -41,6 +41,7 @@ _MAGIC = [
     (b"OggS", "ogg"),
     (b"\x1f\x8b", "gzip"),
     (b"PK\x03\x04", "zip"),
+    (b"SQLite format 3\x00", "sqlite"),
     (b"\x7fELF", "elf"),
 ]
 IMAGE_FORMATS = frozenset({"png", "jpeg", "gif", "bmp", "webp", "tiff", "ico", "heic", "avif"})
@@ -293,6 +294,8 @@ def _named_container(head: bytes) -> str | None:
         return "flac"
     if _is_mp3(head):
         return "mp3"
+    if len(head) >= 265 and head[257:263] in (b"ustar\x00", b"ustar "):
+        return "tar"
     return None
 
 
@@ -437,6 +440,12 @@ def inspect(data: bytes) -> BlobInfo:
     """Structural digest of a blob. Never raises; parses what it can."""
     sha = hashlib.sha256(data).hexdigest()
     fmt = sniff_format(data[:1024])  # widen to match sniff_format's own 1 KiB NUL-heuristic window
+    if fmt in ("zip", "gzip"):
+        from ctx.containers import sniff_container
+
+        refined = sniff_container(data)
+        if refined:
+            fmt = refined
     info = BlobInfo(format=fmt, bytes=len(data), sha256=sha)
     if fmt in IMAGE_FORMATS:
         parser = _DIM_PARSERS.get(fmt)

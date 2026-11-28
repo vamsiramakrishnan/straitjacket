@@ -4031,6 +4031,101 @@ def _skeleton_outline_for(path_str: str, workspace_root: str | None, size: int,
 
 
 _MARKDOWN_SUFFIXES = (".md", ".markdown", ".mdx")
+_BINARY_DOC_SUFFIXES = (
+    ".docx", ".xlsx", ".xlsm", ".pptx", ".odt", ".ods", ".odp", ".epub",
+    ".sqlite", ".sqlite3", ".db",
+)
+_ARCHIVE_SUFFIXES = (".zip", ".whl", ".jar", ".tar", ".tgz", ".tar.gz", ".gz")
+_MARKUP_SUFFIXES = (".html", ".htm", ".xhtml", ".xml", ".svg", ".rss", ".atom")
+_CONFIG_SUFFIXES = (
+    ".yaml", ".yml", ".toml", ".ini", ".cfg", ".conf", ".tf", ".hcl",
+    ".sql", ".proto", ".graphql", ".gql",
+)
+_COMM_SUFFIXES = (".eml", ".mbox", ".ics", ".vcf", ".srt", ".vtt")
+_DELIM_SUFFIXES = (".csv", ".tsv")
+
+
+def _document_outline_for(
+    path_str: str,
+    workspace_root: str | None,
+    size: int,
+    policy: dict[str, Any],
+    range_hint: str = "Read with offset and limit",
+    *,
+    binary_only: bool = False,
+) -> str | None:
+    """Structural outline for whole-file reads of knowledge-work files
+    (Office/ODF/EPUB, SQLite, archives, notebooks, HTML/XML/SVG, YAML/TOML/
+    SQL/Proto/HCL, EML/MBOX/ICS/SRT, CSV/TSV). Pure suffix pre-check so normal
+    source reads import nothing and pay zero syscalls. Fail-open."""
+    low = path_str.lower()
+    rel: str | None = None
+    if workspace_root:
+        try:
+            cand = os.path.relpath(path_str, workspace_root).replace(os.sep, "/")
+            if not cand.startswith(".."):
+                rel = cand
+        except ValueError:
+            rel = None
+
+    try:
+        if low.endswith(_BINARY_DOC_SUFFIXES) or low.endswith(_ARCHIVE_SUFFIXES):
+            from ctx.containers import outline_container_file
+
+            res = outline_container_file(path_str, _redaction_policy(policy), repo_rel=rel)
+            if not res:
+                return None
+            fmt, outline = res
+            return (
+                f"CTX_CONTEXT_GUARD: whole-file read of a {size:,}-byte {fmt} file "
+                f"(~{size // 4:,} tok if raw). Its structural map is below instead of raw "
+                f"binary bytes; extract specific parts with ctx get --part.\n" + outline
+            )
+        if binary_only:
+            return None
+        if low.endswith(".ipynb"):
+            from ctx.digest.nbprof import outline_file as nb_outline
+
+            outline = nb_outline(path_str, _redaction_policy(policy), repo_rel=rel)
+            if not outline:
+                return None
+            return (
+                f"CTX_CONTEXT_GUARD: whole-file read of a {size:,}-byte Jupyter notebook "
+                f"(~{size // 4:,} tok). Its cell outline is below (base64 images omitted); "
+                f"read individual cells with ctx get --part cell:<N>.\n" + outline
+            )
+        kind_label = ""
+        outline = None
+        if low.endswith(_MARKUP_SUFFIXES):
+            from ctx.digest.markupprof import outline_file as mk_outline
+
+            kind_label = "markup"
+            outline = mk_outline(path_str, _redaction_policy(policy))
+        elif low.endswith(_CONFIG_SUFFIXES):
+            from ctx.digest.cfgprof import outline_file as cfg_outline
+
+            kind_label = "config/schema"
+            outline = cfg_outline(path_str, _redaction_policy(policy))
+        elif low.endswith(_COMM_SUFFIXES):
+            from ctx.digest.commprof import outline_file as cm_outline
+
+            kind_label = "communication/transcript"
+            outline = cm_outline(path_str, _redaction_policy(policy))
+        elif low.endswith(_DELIM_SUFFIXES):
+            from ctx.digest.delimprof import outline_file as dm_outline
+
+            kind_label = "delimited table"
+            outline = dm_outline(path_str, _redaction_policy(policy))
+        if not outline:
+            return None
+        repo_hint = f" or ctx get repo:{rel} --lines A:B" if rel else ""
+        return (
+            f"CTX_CONTEXT_GUARD: whole-file read of a {size:,}-byte {kind_label} file "
+            f"(~{size // 4:,} tok). Its structural outline is below instead of the first "
+            f"page; read what you need by range ({range_hint}){repo_hint}.\n" + outline
+        )
+    except Exception:
+        return None
 
 
 def _markdown_outline_for(
@@ -4539,6 +4634,18 @@ def classify_read(
     seen = 0 if in_ledger else _ledger_charge(workspace_root, session_id, 0)
     span = _range_span(tool_input)
     window = _pressured_window(max_lines, seen, budget)
+    if (
+        not in_ledger
+        and _whole_file_read(tool_input)
+        and _steering_allows(policy)
+        and (
+            path_str.lower().endswith(_BINARY_DOC_SUFFIXES)
+            or path_str.lower().endswith(_ARCHIVE_SUFFIXES)
+        )
+    ):
+        outline = _document_outline_for(path_str, workspace_root, size, policy, binary_only=True)
+        if outline:
+            return _deny(outline)
     if span is not None and span <= window:
         # A StartLine/EndLine read is bounded by its own range -- in lines.
         # That host has no output gate, so the bytes are checked here too.
@@ -4559,6 +4666,9 @@ def classify_read(
             if not outline:
                 outline = _markdown_outline_for(path_str, workspace_root, size, policy,
                                                 "view_file with StartLine and EndLine")
+            if not outline:
+                outline = _document_outline_for(path_str, workspace_root, size, policy,
+                                                "view_file with StartLine and EndLine")
             if outline:
                 return _deny(outline)
         # The requested start is kept (1 for a whole-file read): serving a
@@ -4575,6 +4685,8 @@ def classify_read(
                 *(("view_file with StartLine and EndLine",) if _range_style(tool_input) else ()))
             if not outline:
                 outline = _markdown_outline_for(path_str, workspace_root, size, policy, range_hint)
+            if not outline:
+                outline = _document_outline_for(path_str, workspace_root, size, policy, range_hint)
             if outline:
                 # A deny whose reason IS the answer: the outline reaches the
                 # model as the tool's text on every host, and no rewrite is
@@ -4640,7 +4752,8 @@ _CAP_FIELDS = frozenset({"limit", "head_limit"})
 _NOT_LINE_TEXT = _MEDIA_SUFFIXES | frozenset({
     "heic", "heif", "avif", "pdf", "ipynb", "zip", "gz", "tgz", "bz2", "xz", "zst", "7z",
     "tar", "jar", "whl", "exe", "dll", "so", "dylib", "bin", "class", "o", "a", "wasm",
-    "sqlite", "db", "pyc"})
+    "sqlite", "sqlite3", "db", "pyc",
+    "docx", "xlsx", "xlsm", "pptx", "odt", "ods", "odp", "epub"})
 
 
 def _window_note_applies(path_str: str, tool_input: dict[str, Any] | None,
@@ -5331,7 +5444,7 @@ _WORD_RE = re.compile(r"('[^'\\\n]*'|\"[^\"$`\\\n]*\"|[^\s'\"]+)(?:[ \t]+|$)")
 #: Flags each verb may carry in an approved call, and whether they take a value.
 _VERB_FLAGS: dict[str, dict[str, bool]] = {
     "get": {"--lines": True, "--bytes": True, "--records": True, "--json-pointer": True,
-            "--span": True, "--hashlines": False, "--symbol": True},
+            "--part": True, "--span": True, "--hashlines": False, "--symbol": True},
     "search": {"--fixed": False, "--all": False, "--context": True, "--max-matches": True,
                "--glob": True, "--scope": True},
     "stats": {"--scope": True},

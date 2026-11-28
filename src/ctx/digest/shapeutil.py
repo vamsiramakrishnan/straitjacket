@@ -293,6 +293,11 @@ def fit(
     return body
 
 
+def examine_line(text: str) -> str:
+    """Bounded prefix of a single line for regex classification (never rendered)."""
+    return text[:LINE_EXAMINE_CAP]
+
+
 def plain_head(text: str, limit: int = 262144) -> str:
     """``text`` for the cheap pre-checks of ``detect``: when it holds terminal
     escapes, its first ``limit`` characters with them removed (colour codes
@@ -381,7 +386,7 @@ class Windows:
 
 
 __all__ = [
-    "Windows", "plain_head", "FIELD_KEEP", "WINDOW", "ascii_digits", "digits_in",
+    "Windows", "examine_line", "plain_head", "FIELD_KEEP", "WINDOW", "ascii_digits", "digits_in",
     "LINE_EXAMINE_CAP", "Quoter", "fit", "inert", "inline_limit",
     "pct", "size_of",
 ]

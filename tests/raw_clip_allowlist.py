@@ -24,6 +24,7 @@ ALLOWED: dict[tuple[str, str], str] = {
     ("digest/shapeutil.py", "flat[: bounds.count(len(flat) - TAIL_GUARD)]"): "Quoter: cut of REDACTED text, guard away from the window edge",
     ("digest/shapeutil.py", "flat[:keep]"): "Quoter: clip of text already redacted whole",
     ("digest/shapeutil.py", "text[:limit]"): "plain_head: classification input, never rendered",
+    ("digest/shapeutil.py", "text[:LINE_EXAMINE_CAP]"): "examine_line: line classification prefix, never rendered",
     # -- not a display clip: parsing, classification, config editing, lists ------
     ("digest/chunkmap.py", "raw[:-1]"): "drops a trailing CR",
     ("digest/chunkmap.py", "text[:sample_bytes]"): "flavor() classification sample, never rendered",

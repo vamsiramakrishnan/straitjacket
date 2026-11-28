@@ -17,7 +17,12 @@ from ctx.textutil import one_line
 
 # Formats worth a typed binary digest. Plain "text" declines (falls through to
 # the text/log/table profiles); a NUL-bearing unknown blob is still bounded.
-_BINARY_FORMATS = binfmt.IMAGE_FORMATS | binfmt.MEDIA_FORMATS | {"pdf", "binary", "gzip", "zip", "elf", "ogg"}
+_BINARY_FORMATS = (
+    binfmt.IMAGE_FORMATS
+    | binfmt.MEDIA_FORMATS
+    | {"pdf", "binary", "gzip", "zip", "tar", "sqlite", "elf", "ogg"}
+)
+_DELEGABLE_CONTAINERS = frozenset({"zip", "gzip", "tar", "sqlite"})
 
 
 class BinaryProfile(Profile):
@@ -33,6 +38,11 @@ class BinaryProfile(Profile):
             # text payload that merely starts with a magic prefix ("BM…",
             # "%PDF-" quoted in prose) is text.
             return None
+        if fmt in _DELEGABLE_CONTAINERS:
+            from ctx.digest.containerprof import container_format_for
+
+            if container_format_for(ctx) is not None:
+                return None
         if fmt in _BINARY_FORMATS:
             return f"binary output ({fmt}) by magic bytes"
         return None

@@ -149,6 +149,10 @@ def binary_kind(data: bytes) -> str | None:
     has_nul = b"\x00" in data[:8192]
     if fmt == "text":
         return "binary" if has_nul else None
+    if fmt == "svg" and not has_nul:
+        # SVG is UTF-8 XML text (matching binprof: "SVG stays text"), so it
+        # routes to markup/v1 with viewBox + <text> labels + line ranges.
+        return None
     if fmt == "bmp" and not has_nul:
         try:
             data.decode("utf-8")
@@ -279,11 +283,46 @@ def describe_binary(
     the digest is deterministic, bounded by ``digest_tokens`` and sanitized,
     and the address resolves through ``ctx get``.
     """
-    from ctx import binfmt
+    from ctx import binfmt, containers
 
     blob = store.put_blob(data)
     store.lease(blob, LEASE_REASON, ttl_days=store.retention_days)
     address = f"blob:{short_id(blob)}"
+    refined = containers.sniff_container(data)
+    cinfo = containers.inspect_container(data, refined) if refined else None
+    cprof = containers.profile_for_format(refined) if (refined and cinfo and not cinfo.get("error")) else None
+    if cprof is not None and cinfo is not None:
+        header = [
+            f"[ctx {address} profile={cprof}]",
+            f"intake: {label}" + (f" · {name}" if name else ""),
+        ]
+        body_lines, sugg, notes = containers.render_container_body(
+            cinfo, address=address, policy=ws.config.redaction, header=header, level=0
+        )
+        for cmd in sugg[:3]:
+            body_lines.append(f"next: {cmd}")
+        body_lines.extend(notes)
+        text, redactions = sanitize_for_model("\n".join(body_lines), ws.config.redaction)
+        if redactions and "redaction: applied [" not in text:
+            text += "\nredaction: applied [" + ", ".join(redactions) + "]"
+        text = bounded(
+            text,
+            ws.config.budgets.digest_tokens,
+            truncation_continuation=f"ctx get {address} --bytes 1:64",
+        )
+        return IntakeReceipt(
+            kind=refined or kind,
+            address=address,
+            label=label,
+            name=name,
+            bytes=len(data),
+            lines=None,
+            raw_tokens=estimate_tokens(len(data)),
+            delivered_tokens=estimate_tokens(len(encode_exact(text))),
+            profile=cprof,
+            digest=text,
+        )
+
     header = f"[ctx {address} profile=binary/v1]"
     lines = [header, f"intake: {label}" + (f" · {name}" if name else "")]
     info = binfmt.inspect(data)

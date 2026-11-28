@@ -16,11 +16,16 @@ from ctx import POLICY_VERSION
 from ctx.digest.base import DigestContext, Profile, from_intake
 from ctx.digest.binprof import BinaryProfile
 from ctx.digest.capped import CappedProfile
+from ctx.digest.cfgprof import ConfigProfile
+from ctx.digest.commprof import CommProfile
+from ctx.digest.containerprof import ArchiveProfile, OoxmlProfile, SqliteProfile
 from ctx.digest.delimprof import DelimitedDataProfile
 from ctx.digest.intakeprof import ChunkMapProfile
 from ctx.digest.jsonprof import JsonLinesProfile, JsonProfile
 from ctx.digest.lintprof import LintProfile
+from ctx.digest.markupprof import MarkupProfile
 from ctx.digest.mdprof import MarkdownProfile
+from ctx.digest.nbprof import NotebookProfile
 from ctx.digest.searchprof import SearchProfile
 from ctx.digest.logprof import LogTemplateProfile
 from ctx.digest.moreprofs import (
@@ -49,7 +54,11 @@ from ctx.workspace import Workspace
 
 # Fixed probe order — first match wins; text/v1 always matches last.
 _PROFILES: tuple[Profile, ...] = (
-    BinaryProfile(),  # magic-byte binary (image/pdf/…) before any text profile
+    BinaryProfile(),  # magic-byte binary (image/pdf/…) before any text profile;
+    #                   declines valid inspectable containers to the 3 profiles below
+    OoxmlProfile(),  # .docx / .xlsx / .xlsm / .pptx / .odt / .ods / .odp / .epub
+    SqliteProfile(),  # .sqlite / .db read-only schema + row counts
+    ArchiveProfile(),  # .zip / .whl / .jar / .tar / .tar.gz / .gz safe VFS tree
     PytestProfile(),
     GoTestProfile(),
     CargoTestProfile(),  # shape-anchored on 'test result:' — compile-error
@@ -69,7 +78,9 @@ _PROFILES: tuple[Profile, ...] = (
     #                   (which share the shape but carry severity tokens) win first
     BuildProfile(),
     JsonLinesProfile(),
+    NotebookProfile(),  # Jupyter .ipynb notebooks — BEFORE JsonProfile (valid JSON)
     JsonProfile(),
+    MarkupProfile(),  # HTML, SVG, RSS/Atom, and XML — BEFORE Delimited (inline JS/CSS `;` looks delimited)
     DelimitedDataProfile(),  # CSV/TSV/;/| found from field-count structure
     #                          (tool results, command output, and intake). After
     #                          JSON/JSON-lines (a JSONL payload has a consistent
@@ -77,10 +88,12 @@ _PROFILES: tuple[Profile, ...] = (
     #                          which would claim numeric/level-word CSVs
     TableProfile(),  # caps-header aligned tables (docker/kubectl family);
     #                  strict header rule keeps logs and prose out
+    CommProfile(),  # EML, MBOX, ICS, VCF, SRT/VTT (before logs so VTT timestamps aren't templated)
     LogTemplateProfile(),
     MarkdownProfile(),  # structured Markdown documents (ATX headings / YAML
     #                     frontmatter) across tool output, commands, and intake;
     #                     strictly declines source files with `#` comments
+    ConfigProfile(),  # YAML, TOML, INI, HCL/Terraform, SQL, Protobuf, GraphQL
     ChunkMapProfile(),  # intake-only (from_intake): large pasted/attached
     #                     text that text/v1 cannot inline gets a chunk table;
     #                     never matches command output

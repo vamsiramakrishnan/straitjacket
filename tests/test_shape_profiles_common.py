@@ -13,17 +13,35 @@ from shape_helpers import (
 
 from ctx import digest
 from ctx.digest.base import INTAKE_TOOL, DigestContext
+from ctx.digest.cfgprof import ConfigProfile
+from ctx.digest.commprof import CommProfile
+from ctx.digest.containerprof import ArchiveProfile, OoxmlProfile, SqliteProfile
 from ctx.digest.delimprof import DelimitedDataProfile
+from ctx.digest.markupprof import MarkupProfile
 from ctx.digest.mdprof import MarkdownProfile
+from ctx.digest.nbprof import NotebookProfile
 from ctx.digest.traceprof import StackTraceProfile
 from ctx.digest.udiffprof import UnifiedDiffProfile
 from ctx.intake import intake_bytes
 
 # Profiles that remain strictly intake-only so existing command-output receipts
-# for diffs and stack traces stay byte-identical. DelimitedDataProfile and
-# MarkdownProfile apply to both intake and tool/command outputs.
+# for diffs and stack traces stay byte-identical. DelimitedDataProfile,
+# MarkdownProfile, and the Wave 1 knowledge-work profiles apply to both intake
+# and tool/command outputs.
 MINE = (StackTraceProfile, UnifiedDiffProfile)
-ALL_SHAPE = (StackTraceProfile, DelimitedDataProfile, UnifiedDiffProfile, MarkdownProfile)
+ALL_SHAPE = (
+    StackTraceProfile,
+    DelimitedDataProfile,
+    UnifiedDiffProfile,
+    MarkdownProfile,
+    OoxmlProfile,
+    SqliteProfile,
+    ArchiveProfile,
+    NotebookProfile,
+    MarkupProfile,
+    ConfigProfile,
+    CommProfile,
+)
 
 
 @pytest.fixture()

@@ -65,6 +65,7 @@ def _retrieval(ws, ns, verb: str) -> int:
                 bytes=_span(ns.bytes) if ns.bytes else None,
                 records=_span(ns.records) if ns.records else None,
                 json_pointer=ns.json_pointer,
+                part=getattr(ns, "part", None),
                 symbol=ns.symbol,
                 span=ns.span,
             )
