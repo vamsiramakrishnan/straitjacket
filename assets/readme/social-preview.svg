@@ -1,0 +1,31 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="640" viewBox="0 0 1280 640" role="img" aria-labelledby="title description">
+  <title id="title">Straitjacket: context tools for coding agents</title>
+  <desc id="description">A local 20,001-line fixture contained 302,628 o200k_base tokens. Straitjacket returned a 531-token canonical digest and retrieved omitted lines exactly. This is a tool-output measurement, not provider billing. Source: evals/cache-ab-2026-11-23.md.</desc>
+  <rect width="1280" height="640" fill="#f6f5f1"/>
+  <rect x="64" y="48" width="20" height="20" fill="#b7442a"/>
+  <g font-family="DejaVu Sans, sans-serif" fill="#172124">
+    <text x="100" y="67" font-size="25" font-weight="700">straitjacket</text>
+    <text x="1216" y="65" text-anchor="end" font-size="16" fill="#536367">OPEN SOURCE / APACHE-2.0</text>
+    <text x="64" y="160" font-size="54" font-weight="700">Context tools for</text>
+    <text x="64" y="226" font-size="54" font-weight="700">coding agents.</text>
+    <text x="64" y="279" font-size="24" fill="#445357">Bound output. Retrieve evidence. Delegate work.</text>
+    <text x="995" y="151" font-size="21">Claude Code</text>
+    <text x="995" y="191" font-size="21">Codex</text>
+    <text x="995" y="231" font-size="21">Antigravity</text>
+    <line x1="64" y1="318" x2="1216" y2="318" stroke="#b9c0bf" stroke-width="1"/>
+    <text x="64" y="355" font-size="14" letter-spacing="2" fill="#536367">ONE REPRODUCIBLE LOCAL LOG FIXTURE</text>
+    <text x="64" y="421" font-size="53" font-weight="700">302,628</text>
+    <text x="374" y="415" font-size="42" fill="#70817f">→</text>
+    <text x="470" y="421" font-size="53" font-weight="700" fill="#b7442a">531</text>
+    <text x="722" y="415" font-size="42" fill="#70817f">→</text>
+    <text x="820" y="421" font-size="42" font-weight="700">Exact retrieval</text>
+    <text x="64" y="455" font-size="20" fill="#445357">raw log tokens</text>
+    <text x="470" y="455" font-size="20" fill="#445357">canonical digest tokens</text>
+    <text x="820" y="455" font-size="20" fill="#445357">omitted lines recovered</text>
+    <text x="64" y="509" font-size="19">20,001 lines. Quiet anomaly preserved. Full captured bytes verified.</text>
+    <text x="64" y="541" font-size="17" fill="#536367">o200k_base · canonical run handle · local measurement, not a billing benchmark</text>
+    <line x1="64" y1="568" x2="1216" y2="568" stroke="#b9c0bf" stroke-width="1"/>
+    <text x="64" y="605" font-family="DejaVu Sans Mono, monospace" font-size="17">github.com/vamsiramakrishnan/straitjacket</text>
+    <text x="1216" y="605" text-anchor="end" font-size="17" fill="#536367">CLI: ctx · Package: ctx-harness</text>
+  </g>
+</svg>

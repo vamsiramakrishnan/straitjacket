@@ -1,9 +1,12 @@
 # straitjacket
 
-Straitjacket helps coding agents find the code they need and hand work to each
-other. A worker can give the next worker a failing test, a source location, or
-a verified patch without forwarding its conversation. Your harness still runs
-the model, authenticates the user, and controls its tools.
+**Context and evidence tools for coding agents.**
+
+Straitjacket turns long command output into bounded digests with retrieval
+addresses. Agents can open the exact evidence they need, find relevant code,
+and hand a failing test, source location, or verified patch to another harness.
+Use it alongside Claude Code, Codex, Antigravity, and the other supported hosts.
+Your harness still runs the model, authenticates the user, and controls its tools.
 
 <p>
   <a href="https://code.claude.com/"><img src="assets/agents/claude.svg" width="36" height="36" alt="Claude Code" title="Claude Code"></a>
@@ -17,13 +20,10 @@ the model, authenticates the user, and controls its tools.
 
 Python 3.11+ · `ctx-harness` v0.5.0 · Apache-2.0 · [Documentation](https://vamsiramakrishnan.github.io/straitjacket/)
 
-| If you want to… | Start here |
-|---|---|
-| Give exploration, implementation, and verification to different harnesses | [Delegate through ACP](docs/ACP.md) and [inspect the route](docs/ROUTING.md) |
-| Control which skills and tools a session sees | [Inspect skill listings and configure a launch profile](docs/CAPABILITY-SURFACE.md) |
-| Reuse a prompt prefix as the question and evidence change | [Build a stable prefix](docs/QUERY-AWARE-SELECTION.md) and [measure the session](docs/HOW-IT-WORKS.md) |
-| Find an implementation or call site without reading whole files | [Search by symbol, follow references, and open a source range](docs/USE-CASES.md) |
-| Run Gemini 4 Hydrogen, Neon, Carbon, or Argon | [Discover and select an Antigravity model](docs/NATIVE-AGY-SESSIONS.md) |
+**See the mechanism:** the [20,001-line log replay](evals/cache-ab-2026-11-23.md)
+reduces 302,628 tokens to a 531-token canonical digest, retains a quiet anomaly,
+and retrieves omitted lines exactly. This local fixture measures evidence
+delivery. [Task success and cost need separate measurements](#what-the-measurements-show).
 
 ## Try it on a failing test
 
@@ -47,6 +47,16 @@ Use the line range in the search result with `ctx get`. The default capture
 limit is 64 MiB per stream. If output crosses it, the digest identifies the
 discarded middle. To connect your coding harness, run `ctx setup` and then
 `ctx doctor`. [Installation and host setup](docs/GETTING-STARTED.md).
+
+## Choose a workflow
+
+| If you want to… | Start here |
+|---|---|
+| Find an implementation or call site without reading whole files | [Search by symbol, follow references, and open a source range](docs/USE-CASES.md) |
+| Reuse a prompt prefix as the question and evidence change | [Build a stable prefix](docs/QUERY-AWARE-SELECTION.md) and [measure the session](docs/HOW-IT-WORKS.md) |
+| Give exploration, implementation, and verification to different harnesses | [Delegate through ACP](docs/ACP.md) and [inspect the route](docs/ROUTING.md) |
+| Control which skills and tools a session sees | [Inspect skill listings and configure a launch profile](docs/CAPABILITY-SURFACE.md) |
+| Run Gemini 4 Hydrogen, Neon, Carbon, or Argon | [Discover and select an Antigravity model](docs/NATIVE-AGY-SESSIONS.md) |
 
 ## Delegate work across harnesses
 
@@ -125,7 +135,7 @@ native conversation.
 
 | Workload | Observed result |
 |---|---|
-| [20,001-line log fixture](evals/field-needle-2026-07-20.md) | The raw log took 302,628 tokens. The 531-token digest retained the quiet event at line 14,238 and an address for further reading. This fixture checks address emission. |
+| [20,001-line log fixture, replayed November 23](evals/cache-ab-2026-11-23.md) | The raw log took 302,628 o200k_base tokens. The canonical digest took 531; actual counts were 531–537 as opaque run handles changed. It retained the quiet event at line 14,238, preserved the captured bytes exactly, and retrieved an omitted control line. No model ran. |
 | [Source ranges after edits](evals/anchor-drift-2026-08-20.md) | Across 1,920 lookups, anchored ranges relocated 1,452 times, verified in place twice, refused 466 times, and returned the wrong content zero times. |
 | [Three live canary tasks, one run per arm](evals/agentbench/RESULTS.md) | Both arms solved 3/3. With the wrapper, median cache hit rate rose from 96.5% to 97.5% and total cost rose from $0.67 to $0.92. |
 | [Finding files on 14 DeepSWE tasks](evals/agentbench/results/pack_recall.json) | Among the top eight suggestions, `ctx pack` found 54.0% of existing files touched by the reference fix on average. Ranking by grep count found 42.9%. Grep found at least one relevant file on all 14 tasks, the pack on 12. |
@@ -159,6 +169,12 @@ pytest
 
 New mechanisms need deterministic output, explicit degradation, and a named
 evaluation gate. Follow [CONTRIBUTING.md](CONTRIBUTING.md).
+
+Useful first contributions: [add a digest profile for a command you use](docs/WRITING-A-PROFILE.md),
+reproduce an output that loses important evidence, or add a small-output case
+where the wrapper costs more than it saves. Include the command, expected
+evidence, and reproduction steps in an [issue](https://github.com/vamsiramakrishnan/straitjacket/issues/new).
+The [evaluation guide](evals/README.md) shows how to check delivery without a model.
 
 ## Related projects
 
