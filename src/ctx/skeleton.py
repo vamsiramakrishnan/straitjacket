@@ -1219,27 +1219,137 @@ def _find_brace_end(
     start0: int,
     language: str = "go",
     max_scan: int = 2000,
+    after_token: str | None = None,
 ) -> int:
     """1-based end line of a `{ ... }` block opening on or near ``start0``,
-    preserving multiline comment and raw-string lexical state across lines."""
+    preserving multiline comment and raw-string lexical state across lines.
+
+    Braces inside ``(...)`` or ``[...]`` parameter/type lists are ignored, and
+    termination is evaluated at end-of-line so inline object return types like
+    ``function make(): {value: number} {`` never terminate before the body.
+    """
     depth = 0
+    paren_depth = 0
+    bracket_depth = 0
     opened = False
     state: tuple[str, int] = ("", 0)
     limit = min(len(lines), start0 + max_scan)
+    seen_after = after_token is None
     for j in range(start0, limit):
         clean, state = _scan_code_line(lines[j], state, language, _REGEX_LINE_CAP)
-        for ch in clean:
+        scan = clean
+        if not seen_after and after_token is not None:
+            pos = clean.find(after_token)
+            if pos >= 0:
+                scan = clean[pos + len(after_token):]
+                seen_after = True
+            else:
+                scan = ""
+        last_non_ws = ""
+        line_only_type_brace = False
+        for ch in scan:
+            if not opened:
+                if ch == "(":
+                    paren_depth += 1
+                    last_non_ws = ch
+                    continue
+                if ch == ")" and paren_depth > 0:
+                    paren_depth -= 1
+                    last_non_ws = ch
+                    continue
+                if ch == "[":
+                    bracket_depth += 1
+                    last_non_ws = ch
+                    continue
+                if ch == "]" and bracket_depth > 0:
+                    bracket_depth -= 1
+                    last_non_ws = ch
+                    continue
+                if paren_depth > 0 or bracket_depth > 0:
+                    if not ch.isspace():
+                        last_non_ws = ch
+                    continue
             if ch == "{":
+                if depth == 0 and not opened and last_non_ws == ":":
+                    line_only_type_brace = True
+                elif depth == 0:
+                    line_only_type_brace = False
                 depth += 1
                 opened = True
             elif ch == "}":
                 depth -= 1
-                if opened and depth <= 0:
-                    return j + 1
+            if not ch.isspace():
+                last_non_ws = ch
+        if opened and depth <= 0:
+            # Handle multi-line TS return type `): { value: number }\n{` where
+            # the object type closes on line j and the body opens on line j+1.
+            if line_only_type_brace and j + 1 < limit:
+                nxt_clean, _ = _scan_code_line(lines[j + 1], state, language, _REGEX_LINE_CAP)
+                if nxt_clean.lstrip(" \t").startswith("{"):
+                    opened = False
+                    depth = 0
+                    continue
+            return j + 1
         if not opened and state[0] == "" and j - start0 >= 4:
             # Declaration without a body (interface method, prototype, type alias).
             return start0 + 1
-        if not opened and ";" in clean:
+        if not opened and paren_depth == 0 and bracket_depth == 0 and ";" in scan:
+            return j + 1
+    return start0 + 1
+
+
+def _find_js_arrow_end(lines: list[str], start0: int, language: str) -> int:
+    """1-based end line of a JS/TS arrow function without borrowing braces from
+    a following declaration when the arrow is expression-bodied."""
+    state: tuple[str, int] = ("", 0)
+    clean0, state = _scan_code_line(lines[start0], state, language, _REGEX_LINE_CAP)
+    pos = clean0.find("=>")
+    if pos < 0:
+        return start0 + 1
+    tail = clean0[pos + 2:].lstrip(" \t")
+    if not tail:
+        # Arrow body starts on the next non-blank line.
+        if start0 + 1 >= len(lines):
+            return start0 + 1
+        nxt_clean, _ = _scan_code_line(lines[start0 + 1], state, language, _REGEX_LINE_CAP)
+        nxt_s = nxt_clean.lstrip(" \t")
+        if nxt_s.startswith("{"):
+            return _find_brace_end(lines, start0 + 1, language)
+        if not nxt_s:
+            return start0 + 1
+        # Track balanced parens/brackets/braces starting on next line.
+        start_expr = start0 + 1
+        expr_first = nxt_clean
+        expr_state = state
+    elif tail.startswith("{"):
+        return _find_brace_end(lines, start0, language, after_token="=>")
+    else:
+        start_expr = start0
+        expr_first = clean0[pos + 2:]
+        expr_state = state
+
+    paren = bracket = brace = 0
+    limit = min(len(lines), start_expr + 200)
+    cur_state = expr_state
+    for j in range(start_expr, limit):
+        if j == start_expr:
+            seg = expr_first
+        else:
+            seg, cur_state = _scan_code_line(lines[j], cur_state, language, _REGEX_LINE_CAP)
+        for ch in seg:
+            if ch == "(":
+                paren += 1
+            elif ch == ")" and paren > 0:
+                paren -= 1
+            elif ch == "[":
+                bracket += 1
+            elif ch == "]" and bracket > 0:
+                bracket -= 1
+            elif ch == "{":
+                brace += 1
+            elif ch == "}" and brace > 0:
+                brace -= 1
+        if cur_state[0] == "" and paren == 0 and bracket == 0 and brace == 0:
             return j + 1
     return start0 + 1
 
@@ -1453,7 +1563,7 @@ def _regex_extract(source: str, language: str) -> tuple[list[dict[str, Any]], li
                 continue
             m = _match(_JS_ARROW_RE, ln)
             if m:
-                add(m.group(1), "function", i, _find_brace_end(lines, i, language), cur_scope)
+                add(m.group(1), "function", i, _find_js_arrow_end(lines, i, language), cur_scope)
                 continue
             if cur_scope is not None:
                 m = _match(_JS_METHOD_RE, ln)

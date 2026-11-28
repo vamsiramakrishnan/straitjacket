@@ -410,6 +410,35 @@ def test_regex_skeleton_multiline_raw_string_and_block_comment_braces(monkeypatc
     assert rsyms[0]["name"] == "parse"
     assert rsyms[0]["range"] == [1, 5]
 
+    # TypeScript function with inline object return type `{value: number} {`
+    # plus semicolon-free expression-bodied arrow followed by another function.
+    ts_src = "\n".join([
+        "export function make({seed}: {seed: number}): {value: number} {",
+        "  const v = seed + 1;",
+        "  return { value: v };",
+        "}",
+        "",
+        "export const inc = (x: number) => x + 1",
+        "export function run() {",
+        "  return inc(1);",
+        "}",
+        "",
+        "export const multi = (x: number) => (",
+        "  x * 2",
+        ")",
+        "export const blockArrow = (x: number) => {",
+        "  return x * 3;",
+        "}",
+    ])
+    tsyms, _, tbackend = skeleton._extract(ts_src, "typescript", "demo.ts")
+    assert tbackend == "regex"
+    tmap = {s["name"]: s for s in tsyms}
+    assert tmap["make"]["range"] == [1, 4]
+    assert tmap["inc"]["range"] == [6, 6]
+    assert tmap["run"]["range"] == [7, 9]
+    assert tmap["multi"]["range"] == [11, 13]
+    assert tmap["blockArrow"]["range"] == [14, 16]
+
 
 def test_posttooluse_numbered_json_jsonl_and_notebook_structured_retrieval(
     state_home, workspace_dir
