@@ -361,3 +361,119 @@ def test_posttooluse_numbered_markdown_and_csv_unlock_structured_profiles(
     assert "299 data rows" in csv_digest
     fetched_hdr = get(store, ws, f"run:{csv_short}#stdout", Selector(lines=(1, 1)))
     assert "id,region,amount,status,notes" in fetched_hdr
+
+
+def test_regex_skeleton_multiline_raw_string_and_block_comment_braces(monkeypatch):
+    from ctx import skeleton
+
+    _disable_external_skeleton_backends(monkeypatch)
+    monkeypatch.delenv("CTX_NO_REGEX_SKELETON", raising=False)
+
+    # Go function with a multiline raw backtick string containing `}` and a
+    # fake top-level `func` inside it, plus a multiline block comment with `}`.
+    go_src = "\n".join([
+        "package demo",
+        "",
+        "func RenderTemplate() string {",
+        "\t/* comment with brace }",
+        "\tfunc FakeInComment() {}",
+        "\t*/",
+        "\ttpl := `hello {",
+        "} closing brace inside raw string",
+        "func FakeInRawString() {}",
+        "`",
+        "\treturn tpl",
+        "}",
+        "",
+        "func AfterTemplate() int {",
+        "\treturn 42",
+        "}",
+    ])
+    syms, _, backend = skeleton._extract(go_src, "go", "demo.go")
+    assert backend == "regex"
+    by_name = {s["name"]: s for s in syms}
+    assert "FakeInComment" not in by_name
+    assert "FakeInRawString" not in by_name
+    assert by_name["RenderTemplate"]["range"] == [3, 12]
+    assert by_name["AfterTemplate"]["range"] == [14, 16]
+
+    # Rust function with lifetime `'a` and nested block comments `/* /* } */ */`.
+    rust_src = "\n".join([
+        "pub fn parse<'a>(input: &'a str) -> &'a str {",
+        "    /* outer /* nested } */ still comment } */",
+        "    let c = '}';",
+        "    input",
+        "}",
+    ])
+    rsyms, _, rbackend = skeleton._extract(rust_src, "rust", "demo.rs")
+    assert rbackend == "regex"
+    assert rsyms[0]["name"] == "parse"
+    assert rsyms[0]["range"] == [1, 5]
+
+
+def test_posttooluse_numbered_json_jsonl_and_notebook_structured_retrieval(
+    state_home, workspace_dir
+):
+    import json
+    from ctx.digest import digest_output
+    from ctx.retrieval import Selector, get
+
+    ws = make_ws(workspace_dir)
+    store = make_store(ws)
+
+    # 1. Line-numbered pretty-printed JSON array -> json/v1 + working --json-pointer
+    arr = [{"id": i, "name": f"item-{i}", "payload": "x" * 180} for i in range(90)]
+    raw_json = json.dumps(arr, indent=2).splitlines()
+    numbered_json = (
+        f"Showing lines 1-{len(raw_json)} of {len(raw_json)}\n"
+        + "\n".join(f"{i}: {ln}" for i, ln in enumerate(raw_json, 1))
+        + "\n"
+    )
+    j_digest, j_short = digest_output(store, ws, "read_file", numbered_json)
+    assert "profile=json/v1" in j_digest
+    fetched_ptr = get(store, ws, f"run:{j_short}#stdout", Selector(json_pointer="/5"))
+    assert '"id": 5' in fetched_ptr
+    assert '"name": "item-5"' in fetched_ptr
+
+    # 2. Line-numbered JSONL -> working --records 2:3 (ignoring banner & N: prefixes)
+    jsonl_lines = [json.dumps({"seq": i, "msg": "row-" + ("y" * 160)}) for i in range(1, 120)]
+    numbered_jsonl = (
+        f"Showing lines 1-{len(jsonl_lines)} of {len(jsonl_lines)}\n"
+        + "\n".join(f"{i}: {ln}" for i, ln in enumerate(jsonl_lines, 1))
+        + "\n"
+    )
+    _, jl_short = digest_output(store, ws, "read_file", numbered_jsonl)
+    fetched_rec = get(store, ws, f"run:{jl_short}#stdout", Selector(records=(2, 3)))
+    assert '"seq": 2' in fetched_rec
+    assert '"seq": 3' in fetched_rec
+    assert "Showing lines" not in fetched_rec
+
+    # 3. Line-numbered Jupyter notebook (.ipynb) -> notebook/v1 + working --part cell:1
+    nb = {
+        "nbformat": 4,
+        "nbformat_minor": 5,
+        "metadata": {"kernelspec": {"display_name": "Python 3", "name": "python3"}},
+        "cells": [
+            {
+                "cell_type": "markdown",
+                "metadata": {},
+                "source": ["# Notebook Heading\n", "Summary line.\n"],
+            },
+            *[
+                {
+                    "cell_type": "code",
+                    "execution_count": i,
+                    "metadata": {},
+                    "source": [f"x_{i} = {i}  # " + ("z" * 160) + "\n"],
+                    "outputs": [],
+                }
+                for i in range(1, 75)
+            ],
+        ],
+    }
+    nb_lines = json.dumps(nb, indent=2).splitlines()
+    numbered_nb = "\n".join(f"{i}: {ln}" for i, ln in enumerate(nb_lines, 1)) + "\n"
+    nb_digest, nb_short = digest_output(store, ws, "read_file", numbered_nb)
+    assert "profile=notebook/v1" in nb_digest
+    fetched_cell = get(store, ws, f"run:{nb_short}#stdout", Selector(part="cell:1"))
+    assert "Notebook Heading" in fetched_cell

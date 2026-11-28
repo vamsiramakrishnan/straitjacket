@@ -1089,41 +1089,145 @@ def _regex_enabled(language: str | None) -> bool:
     return language in _REGEX_LANGUAGES
 
 
-def _strip_comments_and_strings(line: str, max_chars: int = _REGEX_LINE_CAP) -> str:
-    """Fast linear scan stripping quoted literals and `//` line comments so
-    brace-depth counting is not fooled by `{` or `}` inside strings/comments."""
+_NESTED_BLOCK_COMMENT_LANGS = frozenset({"rust", "kotlin", "swift", "scala"})
+_BACKTICK_MULTILINE_LANGS = frozenset({"go", "javascript", "typescript"})
+_TRIPLE_QUOTE_MULTILINE_LANGS = frozenset({"java", "kotlin", "swift", "scala", "c#"})
+
+
+def _scan_code_line(
+    line: str,
+    state: tuple[str, int],
+    language: str,
+    max_chars: int = _REGEX_LINE_CAP,
+) -> tuple[str, tuple[str, int]]:
+    """Linear-time stateful scanner stripping line comments, multiline block
+    comments (``/* ... */``), single-line strings, and multiline raw/triple
+    strings so brace-depth counting and declaration matching are not fooled by
+    braces or fake signatures inside comments or string literals.
+
+    ``state`` is ``(mode, depth)`` where ``mode`` is ``""``, ``"/*"``, ``"`"``,
+    or ``'\"\"\"'``.
+    """
+    mode, depth = state
     out: list[str] = []
     i = 0
     n = len(line) if len(line) <= max_chars else max_chars
     quote = ""
+    nested_bc = language in _NESTED_BLOCK_COMMENT_LANGS
+    allow_bt = language in _BACKTICK_MULTILINE_LANGS
+    allow_tq = language in _TRIPLE_QUOTE_MULTILINE_LANGS
+    is_shell = language == "shell"
+
     while i < n:
         ch = line[i]
+        if mode == "/*":
+            if ch == "*" and i + 1 < n and line[i + 1] == "/":
+                depth -= 1
+                if depth <= 0:
+                    mode, depth = "", 0
+                i += 2
+                continue
+            if nested_bc and ch == "/" and i + 1 < n and line[i + 1] == "*":
+                depth += 1
+                i += 2
+                continue
+            i += 1
+            continue
+        if mode == "`":
+            if language != "go" and ch == "\\":
+                i += 2
+                continue
+            if ch == "`":
+                mode = ""
+            i += 1
+            continue
+        if mode == '"""':
+            if ch == "\\" and language in ("java", "scala"):
+                i += 2
+                continue
+            if line.startswith('"""', i):
+                mode = ""
+                i += 3
+                continue
+            i += 1
+            continue
         if quote:
-            if ch == "\\" and quote != "`":
+            if ch == "\\":
                 i += 2
                 continue
             if ch == quote:
                 quote = ""
             i += 1
             continue
-        if ch == "/" and i + 1 < n and line[i + 1] == "/":
-            break
-        if ch in ('"', "'", "`"):
-            quote = ch
+
+        if is_shell:
+            if ch == "#" and (i == 0 or line[i - 1] in (" ", "\t", ";", "(", ")")):
+                break
+            if ch in ('"', "'"):
+                quote = ch
+                i += 1
+                continue
+            out.append(ch)
+            i += 1
+            continue
+
+        if ch == "/" and i + 1 < n:
+            nxt = line[i + 1]
+            if nxt == "/":
+                break
+            if nxt == "*":
+                mode, depth = "/*", 1
+                i += 2
+                continue
+        if allow_tq and line.startswith('"""', i):
+            mode, depth = '"""', 0
+            i += 3
+            continue
+        if allow_bt and ch == "`":
+            mode, depth = "`", 0
+            i += 1
+            continue
+        if ch == '"':
+            quote = '"'
+            i += 1
+            continue
+        if ch == "'":
+            if language == "rust":
+                # Distinguish Rust char literals ('x', '\n', '\u{7FFF}') from
+                # lifetime parameters ('a, 'static) so `'a` never swallows `{`.
+                if i + 2 < n and line[i + 2] == "'":
+                    i += 3
+                    continue
+                if i + 1 < n and line[i + 1] == "\\":
+                    end_q = line.find("'", i + 2, min(n, i + 12))
+                    if end_q >= 0:
+                        i = end_q + 1
+                        continue
+                out.append(ch)
+                i += 1
+                continue
+            quote = "'"
             i += 1
             continue
         out.append(ch)
         i += 1
-    return "".join(out)
+    return "".join(out), (mode, depth)
 
 
-def _find_brace_end(lines: list[str], start0: int, max_scan: int = 2000) -> int:
-    """1-based end line of a `{ ... }` block opening on or near ``start0``."""
+def _find_brace_end(
+    lines: list[str],
+    start0: int,
+    language: str = "go",
+    max_scan: int = 2000,
+) -> int:
+    """1-based end line of a `{ ... }` block opening on or near ``start0``,
+    preserving multiline comment and raw-string lexical state across lines."""
     depth = 0
     opened = False
+    state: tuple[str, int] = ("", 0)
     limit = min(len(lines), start0 + max_scan)
     for j in range(start0, limit):
-        clean = _strip_comments_and_strings(lines[j], _REGEX_LINE_CAP)
+        clean, state = _scan_code_line(lines[j], state, language, _REGEX_LINE_CAP)
         for ch in clean:
             if ch == "{":
                 depth += 1
@@ -1132,7 +1236,7 @@ def _find_brace_end(lines: list[str], start0: int, max_scan: int = 2000) -> int:
                 depth -= 1
                 if opened and depth <= 0:
                     return j + 1
-        if not opened and j - start0 >= 4:
+        if not opened and state[0] == "" and j - start0 >= 4:
             # Declaration without a body (interface method, prototype, type alias).
             return start0 + 1
         if not opened and ";" in clean:
@@ -1256,10 +1360,21 @@ def _regex_extract(source: str, language: str) -> tuple[list[dict[str, Any]], li
     def _match(rx: re.Pattern[str], text: str) -> re.Match[str] | None:
         return rx.match(text, 0, _REGEX_LINE_CAP)
 
+    def _code_lines() -> list[tuple[int, str]]:
+        """Return (idx0, line) pairs for lines that begin outside multiline
+        block comments and multiline raw/triple-quoted strings."""
+        kept: list[tuple[int, str]] = []
+        lex_state: tuple[str, int] = ("", 0)
+        for idx0, line in enumerate(lines):
+            if lex_state[0] == "":
+                kept.append((idx0, line))
+            _, lex_state = _scan_code_line(line, lex_state, language, _REGEX_LINE_CAP)
+        return kept
+
     if language == "go":
         in_import = False
         group_cv_kind: str | None = None
-        for i, ln in enumerate(lines):
+        for i, ln in _code_lines():
             s = ln.lstrip(" \t")
             if in_import:
                 if s.startswith(")"):
@@ -1297,21 +1412,21 @@ def _regex_extract(source: str, language: str) -> tuple[list[dict[str, Any]], li
             m = _match(_GO_TYPE_RE, ln)
             if m:
                 tkind = m.group(2) if m.group(2) in ("struct", "interface") else "type"
-                add(m.group(1), tkind, i, _find_brace_end(lines, i), None)
+                add(m.group(1), tkind, i, _find_brace_end(lines, i, language), None)
                 continue
             m = _match(_GO_METHOD_RE, ln)
             if m:
-                add(m.group(2), "method", i, _find_brace_end(lines, i), m.group(1))
+                add(m.group(2), "method", i, _find_brace_end(lines, i, language), m.group(1))
                 continue
             m = _match(_GO_FUNC_RE, ln)
             if m:
-                add(m.group(1), "function", i, _find_brace_end(lines, i), None)
+                add(m.group(1), "function", i, _find_brace_end(lines, i, language), None)
         return symbols, sorted(dict.fromkeys(imports))
 
     if language in ("typescript", "javascript"):
         # Track active class/interface scopes as (name, end_line_1based).
         scopes: list[tuple[str, int]] = []
-        for i, ln in enumerate(lines):
+        for i, ln in _code_lines():
             ln_no = i + 1
             while scopes and ln_no > scopes[-1][1]:
                 scopes.pop()
@@ -1322,33 +1437,33 @@ def _regex_extract(source: str, language: str) -> tuple[list[dict[str, Any]], li
             cur_scope = scopes[-1][0] if scopes else None
             m = _match(_JS_CLASS_RE, ln)
             if m:
-                end_ln = _find_brace_end(lines, i)
+                end_ln = _find_brace_end(lines, i, language)
                 add(m.group(1), "class", i, end_ln, cur_scope)
                 if end_ln > ln_no:
                     scopes.append((m.group(1), end_ln))
                 continue
             m = _match(_JS_IFACE_RE, ln)
             if m:
-                end_ln = _find_brace_end(lines, i)
+                end_ln = _find_brace_end(lines, i, language)
                 add(m.group(2), m.group(1), i, end_ln, cur_scope)
                 continue
             m = _match(_JS_FUNC_RE, ln)
             if m:
-                add(m.group(1), "function", i, _find_brace_end(lines, i), cur_scope)
+                add(m.group(1), "function", i, _find_brace_end(lines, i, language), cur_scope)
                 continue
             m = _match(_JS_ARROW_RE, ln)
             if m:
-                add(m.group(1), "function", i, _find_brace_end(lines, i), cur_scope)
+                add(m.group(1), "function", i, _find_brace_end(lines, i, language), cur_scope)
                 continue
             if cur_scope is not None:
                 m = _match(_JS_METHOD_RE, ln)
                 if m and m.group(1) not in _CTRL_WORDS:
-                    add(m.group(1), "method", i, _find_brace_end(lines, i), cur_scope)
+                    add(m.group(1), "method", i, _find_brace_end(lines, i, language), cur_scope)
         return symbols, sorted(dict.fromkeys(imports))
 
     if language == "rust":
         scopes = []
-        for i, ln in enumerate(lines):
+        for i, ln in _code_lines():
             ln_no = i + 1
             while scopes and ln_no > scopes[-1][1]:
                 scopes.pop()
@@ -1359,13 +1474,13 @@ def _regex_extract(source: str, language: str) -> tuple[list[dict[str, Any]], li
             cur_scope = scopes[-1][0] if scopes else None
             m = _match(_RUST_IMPL_RE, ln)
             if m:
-                end_ln = _find_brace_end(lines, i)
+                end_ln = _find_brace_end(lines, i, language)
                 if end_ln > ln_no:
                     scopes.append((m.group(1), end_ln))
                 continue
             m = _match(_RUST_TYPE_RE, ln)
             if m:
-                end_ln = _find_brace_end(lines, i)
+                end_ln = _find_brace_end(lines, i, language)
                 add(m.group(2), m.group(1), i, end_ln, cur_scope)
                 if m.group(1) in ("trait", "mod") and end_ln > ln_no:
                     scopes.append((m.group(2), end_ln))
@@ -1373,12 +1488,12 @@ def _regex_extract(source: str, language: str) -> tuple[list[dict[str, Any]], li
             m = _match(_RUST_FN_RE, ln)
             if m:
                 kind = "method" if cur_scope else "function"
-                add(m.group(1), kind, i, _find_brace_end(lines, i), cur_scope)
+                add(m.group(1), kind, i, _find_brace_end(lines, i, language), cur_scope)
         return symbols, sorted(dict.fromkeys(imports))
 
     if language in ("c", "c++"):
         scopes = []
-        for i, ln in enumerate(lines):
+        for i, ln in _code_lines():
             ln_no = i + 1
             while scopes and ln_no > scopes[-1][1]:
                 scopes.pop()
@@ -1390,7 +1505,7 @@ def _regex_extract(source: str, language: str) -> tuple[list[dict[str, Any]], li
             m = _match(_C_TYPE_RE, ln)
             if m:
                 raw_kind = m.group(1).split()[0]
-                end_ln = _find_brace_end(lines, i)
+                end_ln = _find_brace_end(lines, i, language)
                 if raw_kind != "namespace":
                     add(m.group(2), raw_kind, i, end_ln, cur_scope)
                 if end_ln > ln_no and raw_kind in ("namespace", "class", "struct"):
@@ -1406,12 +1521,12 @@ def _regex_extract(source: str, language: str) -> tuple[list[dict[str, Any]], li
                 name = full.split("::")[-1]
                 if name not in _CTRL_WORDS:
                     kind = "method" if (cur_scope and "::" not in full) else "function"
-                    add(name, kind, i, _find_brace_end(lines, i), cur_scope if "::" not in full else None)
+                    add(name, kind, i, _find_brace_end(lines, i, language), cur_scope if "::" not in full else None)
         return symbols, sorted(dict.fromkeys(imports))
 
     if language in ("java", "c#", "kotlin", "scala", "swift", "php"):
         scopes = []
-        for i, ln in enumerate(lines):
+        for i, ln in _code_lines():
             ln_no = i + 1
             while scopes and ln_no > scopes[-1][1]:
                 scopes.pop()
@@ -1422,7 +1537,7 @@ def _regex_extract(source: str, language: str) -> tuple[list[dict[str, Any]], li
             cur_scope = scopes[-1][0] if scopes else None
             m = _match(_JAVA_TYPE_RE, ln)
             if m:
-                end_ln = _find_brace_end(lines, i)
+                end_ln = _find_brace_end(lines, i, language)
                 add(m.group(2), m.group(1), i, end_ln, cur_scope)
                 if end_ln > ln_no:
                     scopes.append((m.group(2), end_ln))
@@ -1430,24 +1545,24 @@ def _regex_extract(source: str, language: str) -> tuple[list[dict[str, Any]], li
             if language == "kotlin":
                 m = _match(_KT_FUN_RE, ln)
                 if m:
-                    add(m.group(1), "method" if cur_scope else "function", i, _find_brace_end(lines, i), cur_scope)
+                    add(m.group(1), "method" if cur_scope else "function", i, _find_brace_end(lines, i, language), cur_scope)
             elif language == "scala":
                 m = _match(_SCALA_DEF_RE, ln)
                 if m:
-                    add(m.group(1), "method" if cur_scope else "function", i, _find_brace_end(lines, i), cur_scope)
+                    add(m.group(1), "method" if cur_scope else "function", i, _find_brace_end(lines, i, language), cur_scope)
             elif language == "swift":
                 m = _match(_SWIFT_FUNC_RE, ln)
                 if m:
                     nm = m.group(2) or m.group(3)
-                    add(nm, "method" if cur_scope else "function", i, _find_brace_end(lines, i), cur_scope)
+                    add(nm, "method" if cur_scope else "function", i, _find_brace_end(lines, i, language), cur_scope)
             elif language == "php":
                 m = _match(_PHP_FUNC_RE, ln)
                 if m:
-                    add(m.group(1), "method" if cur_scope else "function", i, _find_brace_end(lines, i), cur_scope)
+                    add(m.group(1), "method" if cur_scope else "function", i, _find_brace_end(lines, i, language), cur_scope)
             elif cur_scope is not None:
                 m = _match(_JVM_METHOD_RE, ln)
                 if m and m.group(1) not in _CTRL_WORDS:
-                    add(m.group(1), "method", i, _find_brace_end(lines, i), cur_scope)
+                    add(m.group(1), "method", i, _find_brace_end(lines, i, language), cur_scope)
         return symbols, sorted(dict.fromkeys(imports))
 
     if language == "ruby":
@@ -1489,7 +1604,7 @@ def _regex_extract(source: str, language: str) -> tuple[list[dict[str, Any]], li
             m = _match(_SH_FUNC_RE, ln)
             if m:
                 nm = m.group(1) or m.group(2)
-                add(nm, "function", i, _find_brace_end(lines, i), None)
+                add(nm, "function", i, _find_brace_end(lines, i, language), None)
         return symbols, sorted(dict.fromkeys(imports))
 
     return [], []
