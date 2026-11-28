@@ -644,13 +644,15 @@ class DelimitedDataProfile(Profile):
     version = "delimited/v1"
 
     def detect(self, ctx: DigestContext) -> str | None:
-        if not from_intake(ctx):
-            return None
         view = ctx.stdout
         if ctx.stderr.bytes or not view.bytes or not view.text:
             return None
         if view.media_type.startswith("application/octet-stream"):
             return None
+        if not from_intake(ctx):
+            code = ctx.manifest.get("result", {}).get("exitCode")
+            if code not in (0, None):
+                return None
         if view.bytes <= inline_limit(ctx):
             return None
         found = sniff(mappable_text(view.text, view.parsed_fully))
@@ -716,7 +718,11 @@ class DelimitedDataProfile(Profile):
             n_cols, n_rows, cell_cap, name_cap = ((12, 3, 18, 24), (8, 2, 14, 20), (5, 1, 12, 16),
                                                   (3, 1, 10, 12), (0, 0, 8, 12))[level]
             q = Quoter(cell_cap, policy)
-            out = [ctx.intake_line(total=partial) + " · delimited data"]
+            out = (
+                [ctx.intake_line(total=partial) + " · delimited data"]
+                if from_intake(ctx)
+                else list(ctx.header_lines())
+            )
             kind_txt = (f"{_plural(data_rows, 'data row')}" if header
                         else f"{_plural(data_rows, 'row')}") + " (exact" + (
                             "" if not partial else ", in the parsed part") + ")"

@@ -484,6 +484,22 @@ def _tool_call(params: dict[str, Any], *, edit_workspace: str | None = None) -> 
         return {"content": [{"type": "text", "text": text}], "isError": True}
 
 
+def _meta_workspace(params: dict[str, Any]) -> str | None:
+    """Fallback workspace path carried by a host in JSON-RPC ``params._meta``."""
+    meta = params.get("_meta")
+    if not isinstance(meta, dict):
+        return None
+    for list_key in ("antigravity.google/workspace_paths", "workspace_paths", "workspacePaths"):
+        paths = meta.get(list_key)
+        if isinstance(paths, list) and paths and isinstance(paths[0], str) and paths[0]:
+            return paths[0]
+    for str_key in ("workspace_path", "workspacePath"):
+        val = meta.get(str_key)
+        if isinstance(val, str) and val:
+            return val
+    return None
+
+
 def serve(bounded_only: bool = True, workspace: str | None = None, with_edits: bool = False) -> int:
     """Run the stdio MCP server until EOF. ``bounded_only`` is the only
     supported v1 mode and is accepted for forward compatibility."""
@@ -534,10 +550,14 @@ def serve(bounded_only: bool = True, workspace: str | None = None, with_edits: b
             reply(msg_id, {"tools": schemas})
         elif method == "tools/call":
             params = msg.get("params") or {}
-            if workspace and isinstance(params, dict):
-                arguments = params.get("arguments", {})
-                if isinstance(arguments, dict):
-                    params = {**params, "arguments": {"workspace": workspace, **arguments}}
+            if isinstance(params, dict):
+                fallback_ws = workspace or _meta_workspace(params)
+                if fallback_ws:
+                    arguments = params.get("arguments")
+                    if arguments is None:
+                        arguments = {}
+                    if isinstance(arguments, dict) and not arguments.get("workspace"):
+                        params = {**params, "arguments": {**arguments, "workspace": fallback_ws}}
             reply(msg_id, _tool_call(params, edit_workspace=workspace if with_edits else None))
         elif method == "ping":
             reply(msg_id, {})

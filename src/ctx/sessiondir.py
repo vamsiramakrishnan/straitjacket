@@ -79,6 +79,44 @@ def _is_private(name: str) -> bool:
     return name.startswith(("reflex.json.", "guard-policy-cache.json."))
 
 
+def _force_private_all(workspace_root) -> bool:
+    """True when all ledgers for ``workspace_root`` must stay outside the
+    repository (e.g. read-only, shared, or snapshot-retaining filesystems).
+
+    Controlled by two generic environment variables:
+    - ``CTX_PRIVATE_LEDGERS_ALL`` (``1`` / ``true`` / ``yes``): route every
+      ledger for every workspace under :func:`private_ledger_dir`.
+    - ``CTX_PRIVATE_LEDGER_PREFIXES`` (``os.pathsep``-separated prefixes):
+      route every ledger for workspaces whose path or ``realpath`` sits under
+      one of the configured directory prefixes.
+    """
+    if os.environ.get("CTX_PRIVATE_LEDGERS_ALL", "").strip().lower() in ("1", "true", "yes"):
+        return True
+    raw = os.environ.get("CTX_PRIVATE_LEDGER_PREFIXES", "")
+    if not raw:
+        return False
+    ws = str(workspace_root)
+    if not ws:
+        return False
+    ws_real = ""
+    for entry in raw.split(os.pathsep):
+        prefix = entry.strip()
+        if not prefix:
+            continue
+        norm = prefix.rstrip(os.sep) or os.sep
+        sep_prefix = norm if norm.endswith(os.sep) else norm + os.sep
+        if ws == norm or ws.startswith(sep_prefix):
+            return True
+        if not ws_real:
+            try:
+                ws_real = os.path.realpath(ws)
+            except OSError:
+                ws_real = ws
+        if ws_real == norm or ws_real.startswith(sep_prefix):
+            return True
+    return False
+
+
 def session_reads_dir(workspace_root, *parts: str) -> str:
     """``<workspace_root>/.ctx-session-reads[/parts...]`` as a plain string.
 
@@ -86,8 +124,11 @@ def session_reads_dir(workspace_root, *parts: str) -> str:
     *inside* the ledger directory (``"proxy", "window.json"``,
     ``"gate-fallback"``, ``f"{session_id}.count"``); ask for the subpath
     rather than re-deriving it from a separately-built parent. A file named
-    in :data:`PRIVATE_LEDGERS` resolves to :func:`private_ledger_dir`.
+    in :data:`PRIVATE_LEDGERS` (or any ledger under a private-ledger
+    environment override) resolves to :func:`private_ledger_dir`.
     """
+    if _force_private_all(workspace_root):
+        return os.path.join(private_ledger_dir(workspace_root), *parts)
     if parts and _is_private(parts[0]):
         private = os.path.join(private_ledger_dir(workspace_root), *parts)
         if len(parts) == 1 and not os.path.lexists(private):
@@ -126,7 +167,7 @@ def ledger_file(reads_dir, name: str):
     from pathlib import Path
 
     reads_dir = Path(reads_dir)
-    if _is_private(name):
+    if _is_private(name) or _force_private_all(reads_dir.parent):
         private = Path(session_reads_dir(reads_dir.parent, name))
         if private.exists() or not (reads_dir / name).exists():
             return private

@@ -1,5 +1,5 @@
-"""Properties the three intake shape profiles share: registry order, intake-only
-gating (command-output digests stay byte-identical), linear time."""
+"""Properties the shape profiles share: registry order, intake-only gating for
+plain diffs and traces (command-output digests stay byte-identical), linear time."""
 
 from __future__ import annotations
 
@@ -14,11 +14,16 @@ from shape_helpers import (
 from ctx import digest
 from ctx.digest.base import INTAKE_TOOL, DigestContext
 from ctx.digest.delimprof import DelimitedDataProfile
+from ctx.digest.mdprof import MarkdownProfile
 from ctx.digest.traceprof import StackTraceProfile
 from ctx.digest.udiffprof import UnifiedDiffProfile
 from ctx.intake import intake_bytes
 
-MINE = (StackTraceProfile, DelimitedDataProfile, UnifiedDiffProfile)
+# Profiles that remain strictly intake-only so existing command-output receipts
+# for diffs and stack traces stay byte-identical. DelimitedDataProfile and
+# MarkdownProfile apply to both intake and tool/command outputs.
+MINE = (StackTraceProfile, UnifiedDiffProfile)
+ALL_SHAPE = (StackTraceProfile, DelimitedDataProfile, UnifiedDiffProfile, MarkdownProfile)
 
 
 @pytest.fixture()
@@ -30,8 +35,7 @@ def env(state_home, workspace_dir):
 def payloads() -> dict[str, str]:
     return {
         "python": padded(python_trace(recursion=120)), "js": js_trace(), "java": java_trace(),
-        "go": go_trace(), "rust": rust_trace(), "csv": csv_text(600), "tsv": csv_text(600, "\t"),
-        "semicolon": csv_text(600, ";"), "udiff": unified_diff(12),
+        "go": go_trace(), "rust": rust_trace(), "udiff": unified_diff(12),
         "udiff_in_log": "2024 INFO x\n" * 200 + unified_diff(4) + "2024 INFO y\n" * 200,
     }
 
@@ -48,19 +52,22 @@ def test_registry_order_and_why():
     # consistent comma count) and before the aligned-table and log profiles,
     # which claim CSVs with numeric columns and level words.
     assert at("JsonProfile") < at("DelimitedDataProfile") < at("TableProfile") < at("LogTemplateProfile")
-    # The generic fallbacks still catch everything these decline.
+    # Markdown sits after logs and before the generic intake chunk-map and text fallbacks.
+    assert at("LogTemplateProfile") < at("MarkdownProfile") < at("ChunkMapProfile") < at("TextProfile") == len(names) - 1
     assert at("DelimitedDataProfile") < at("ChunkMapProfile") < at("TextProfile") == len(names) - 1
     assert at("BinaryProfile") == 0
 
 
 def test_every_new_profile_has_a_version_a_detect_and_a_render():
     versions = []
-    for cls in MINE:
+    for cls in ALL_SHAPE:
         p = cls()
         assert isinstance(p.version, str) and p.version.endswith("/v1")
         assert cls.detect is not digest.Profile.detect and cls.render is not digest.Profile.render
         versions.append(p.version)
-    assert len(set(versions)) == 3 and not set(versions) & {q.version for q in digest._PROFILES if type(q) not in MINE}
+    assert len(set(versions)) == len(ALL_SHAPE) and not set(versions) & {
+        q.version for q in digest._PROFILES if type(q) not in ALL_SHAPE
+    }
 
 
 # --------------------------------------------------------- intake-only gating

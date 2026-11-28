@@ -20,6 +20,7 @@ from ctx.digest.delimprof import DelimitedDataProfile
 from ctx.digest.intakeprof import ChunkMapProfile
 from ctx.digest.jsonprof import JsonLinesProfile, JsonProfile
 from ctx.digest.lintprof import LintProfile
+from ctx.digest.mdprof import MarkdownProfile
 from ctx.digest.searchprof import SearchProfile
 from ctx.digest.logprof import LogTemplateProfile
 from ctx.digest.moreprofs import (
@@ -69,13 +70,17 @@ _PROFILES: tuple[Profile, ...] = (
     BuildProfile(),
     JsonLinesProfile(),
     JsonProfile(),
-    DelimitedDataProfile(),  # intake-only: CSV/TSV/;/| found from field-count
-    #                          structure. After JSON/JSON-lines (a JSONL paste has
-    #                          a consistent comma count too), before the table and
-    #                          log profiles, which would claim numeric/level-word CSVs
+    DelimitedDataProfile(),  # CSV/TSV/;/| found from field-count structure
+    #                          (tool results, command output, and intake). After
+    #                          JSON/JSON-lines (a JSONL payload has a consistent
+    #                          comma count too), before table and log profiles,
+    #                          which would claim numeric/level-word CSVs
     TableProfile(),  # caps-header aligned tables (docker/kubectl family);
     #                  strict header rule keeps logs and prose out
     LogTemplateProfile(),
+    MarkdownProfile(),  # structured Markdown documents (ATX headings / YAML
+    #                     frontmatter) across tool output, commands, and intake;
+    #                     strictly declines source files with `#` comments
     ChunkMapProfile(),  # intake-only (from_intake): large pasted/attached
     #                     text that text/v1 cannot inline gets a chunk table;
     #                     never matches command output
