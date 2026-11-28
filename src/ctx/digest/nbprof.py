@@ -308,16 +308,62 @@ def outline_file(
     return "\n".join(lines)
 
 
+def _render_cell_lines(cell: dict[str, Any], idx: int, policy: Any) -> list[str]:
+    from ctx.containers import _redact_full_text
+
+    ctype = str(cell.get("cell_type") or "raw")
+    ec = cell.get("execution_count")
+    tag = f"{ctype}:{ec}" if ctype == "code" and isinstance(ec, int) else ctype
+    block = [f"=== Cell #{idx} [{tag}] ==="]
+    src = _join_source(cell.get("source"))
+    if src:
+        block.extend(_redact_full_text(src, policy).splitlines())
+    outputs = cell.get("outputs")
+    if isinstance(outputs, list) and outputs:
+        block.append("--- outputs ---")
+        for item in outputs:
+            if not isinstance(item, dict):
+                continue
+            otype = str(item.get("output_type") or "")
+            if otype == "stream":
+                stxt = _join_source(item.get("text"))
+                if stxt:
+                    block.extend(itertools.islice(_redact_full_text(stxt, policy).splitlines(), 200))
+            elif otype == "error":
+                ename = str(item.get("ename") or "Error")
+                evalue = _ANSI_STRIP_RE.sub("", str(item.get("evalue") or ""))
+                block.append(_redact_full_text(f"ERROR {ename}: {evalue}", policy))
+                tb = item.get("traceback")
+                if isinstance(tb, list):
+                    tb_txt = "\n".join(_ANSI_STRIP_RE.sub("", str(tln)) for tln in itertools.islice(tb, 80))
+                    if tb_txt:
+                        block.extend(_redact_full_text(tb_txt, policy).splitlines())
+            elif otype in ("display_data", "execute_result"):
+                dmap = item.get("data")
+                if isinstance(dmap, dict):
+                    for mime in _BINARY_MIMES:
+                        if mime in dmap:
+                            sz = len(_join_source(dmap[mime]))
+                            block.append(f"[{mime} {fmt_bytes(sz)} base64 omitted]")
+                    if "text/plain" in dmap:
+                        ptxt = _join_source(dmap["text/plain"])
+                        if ptxt:
+                            block.extend(itertools.islice(_redact_full_text(ptxt, policy).splitlines(), 100))
+    return block
+
+
 def extract_notebook_part(
     data: bytes,
     spec: str,
     *,
+    policy: Any = None,
     max_lines: int = 240,
     max_bytes: int = 4800,
 ) -> tuple[str, str, str | None]:
-    """Extract ``--part cell:N`` or ``--part cells:A:B`` from a Jupyter
-    notebook with base64 images omitted."""
-    from ctx.containers import ContainerError
+    """Extract ``--part cell:N[:A:B]`` or ``--part cells:A:B`` from a Jupyter
+    notebook with base64 images omitted, pre-slice redaction, and within-cell
+    line pagination when a single cell exceeds ``max_lines`` or ``max_bytes``."""
+    from ctx.containers import ContainerError, _slice_lines
 
     try:
         obj = loads_fast(data.decode("utf-8", "replace"))
@@ -327,73 +373,77 @@ def extract_notebook_part(
         raise ContainerError("content is not a Jupyter .ipynb notebook")
     raw_cells = obj["cells"]
     total = len(raw_cells)
+
     if spec.startswith("cell:"):
-        num = spec[len("cell:"):]
-        if not num.isdigit():
-            raise ContainerError(f"invalid notebook selector {spec!r}; use cell:<N> or cells:<A>:<B>")
-        a = b = int(num)
-    elif spec.startswith("cells:"):
-        rest = spec[len("cells:"):]
-        m = re.fullmatch(r"(\d+):(\d+)", rest)
+        cm = re.fullmatch(r"cell:(\d+)(?::(\d+):(\d+))?", spec)
+        if not cm:
+            raise ContainerError(f"invalid notebook selector {spec!r}; use cell:<N>[:A:B] or cells:<A>:<B>")
+        idx = int(cm.group(1))
+        if idx < 1 or idx > total:
+            raise ContainerError(f"cell {idx} out of range (notebook has {total} cells)")
+        cell_lines = _render_cell_lines(raw_cells[idx - 1], idx, policy)
+        la = int(cm.group(2)) if cm.group(2) else 1
+        lb = int(cm.group(3)) if cm.group(3) else len(cell_lines)
+        return _slice_lines(cell_lines, la, lb, f"cell:{idx}", max_lines, max_bytes)
+
+    if spec.startswith("cells:"):
+        m = re.fullmatch(r"cells:(\d+):(\d+)(?::(\d+):(\d+))?", spec)
         if not m:
-            raise ContainerError(f"invalid notebook selector {spec!r}; use cells:<A>:<B>")
+            raise ContainerError(
+                f"invalid notebook selector {spec!r}; use cells:<A>:<B> or cells:<A>:<B>:<LA>:<LB>"
+            )
         a, b = int(m.group(1)), int(m.group(2))
+        outer_line_range = (int(m.group(3)), int(m.group(4))) if m.group(3) else None
     else:
-        raise ContainerError(f"unknown notebook --part {spec!r}; use cell:<N> or cells:<A>:<B>")
+        raise ContainerError(f"unknown notebook --part {spec!r}; use cell:<N>[:A:B] or cells:<A>:<B>[:LA:LB]")
 
     win = bounds.span(a, b, total)
     if win is None:
         raise ContainerError(f"cell range {a}:{b} out of range (notebook has {total} cells)")
     a, b = win
 
+    if outer_line_range is not None:
+        la, lb = outer_line_range
+        block = _render_cell_lines(raw_cells[a - 1], a, policy)
+        sub_lbl, sub_body, sub_cont = _slice_lines(
+            block, la, lb, f"cells:{a}:{b}", max_lines, max_bytes
+        )
+        if sub_cont is None and a < total:
+            span = b - a + 1
+            nxt_a = a + 1
+            nxt_b = min(total, max(b, a + (span if span > 0 else 5)))
+            sub_cont = f"cells:{nxt_a}:{nxt_b}"
+        return f"cell:{a} ({sub_lbl})", sub_body, sub_cont
+
+    cap_lines = bounds.count(max_lines)
     rendered: list[str] = []
-    used = 0
+    used_bytes = 0
+    used_lines = 0
     shown_end = a - 1
     for idx in range(a, b + 1):
-        cell = raw_cells[idx - 1]
-        ctype = str(cell.get("cell_type") or "raw")
-        ec = cell.get("execution_count")
-        tag = f"{ctype}:{ec}" if ctype == "code" and isinstance(ec, int) else ctype
-        block = [f"=== Cell #{idx} [{tag}] ==="]
-        src = _join_source(cell.get("source"))
-        if src:
-            block.extend(src.splitlines())
-        outputs = cell.get("outputs")
-        if isinstance(outputs, list) and outputs:
-            block.append("--- outputs ---")
-            for item in outputs:
-                if not isinstance(item, dict):
-                    continue
-                otype = str(item.get("output_type") or "")
-                if otype == "stream":
-                    stxt = _join_source(item.get("text"))
-                    if stxt:
-                        block.extend(itertools.islice(stxt.splitlines(), 40))
-                elif otype == "error":
-                    ename = str(item.get("ename") or "Error")
-                    evalue = _ANSI_STRIP_RE.sub("", str(item.get("evalue") or ""))
-                    block.append(f"ERROR {ename}: {evalue}")
-                    tb = item.get("traceback")
-                    if isinstance(tb, list):
-                        for tln in itertools.islice(tb, 20):
-                            block.append(_ANSI_STRIP_RE.sub("", str(tln)))
-                elif otype in ("display_data", "execute_result"):
-                    dmap = item.get("data")
-                    if isinstance(dmap, dict):
-                        for mime in _BINARY_MIMES:
-                            if mime in dmap:
-                                sz = len(_join_source(dmap[mime]))
-                                block.append(f"[{mime} {fmt_bytes(sz)} base64 omitted]")
-                        if "text/plain" in dmap:
-                            ptxt = _join_source(dmap["text/plain"])
-                            if ptxt:
-                                block.extend(itertools.islice(ptxt.splitlines(), 30))
+        block = _render_cell_lines(raw_cells[idx - 1], idx, policy)
         block_text = "\n".join(block)
-        cost = len(block_text.encode("utf-8", "replace")) + 1
-        if rendered and used + cost > max_bytes:
+        cost_bytes = len(block_text.encode("utf-8", "replace")) + 2
+        cost_lines = len(block)
+        exceeds = cost_bytes > max_bytes or (cap_lines > 0 and cost_lines > cap_lines)
+        if not rendered and exceeds:
+            sub_lbl, sub_body, sub_cont = _slice_lines(
+                block, 1, len(block), f"cells:{a}:{b}", max_lines, max_bytes
+            )
+            if sub_cont is None and idx < total:
+                span = b - a + 1
+                nxt_a = idx + 1
+                nxt_b = min(total, max(b, idx + (span if span > 0 else 5)))
+                sub_cont = f"cells:{nxt_a}:{nxt_b}"
+            return f"cell:{idx} ({sub_lbl})", sub_body, sub_cont
+        if rendered and (
+            used_bytes + cost_bytes > max_bytes
+            or (cap_lines > 0 and used_lines + cost_lines > cap_lines)
+        ):
             break
         rendered.append(block_text)
-        used += cost
+        used_bytes += cost_bytes
+        used_lines += cost_lines
         shown_end = idx
 
     if shown_end < a:

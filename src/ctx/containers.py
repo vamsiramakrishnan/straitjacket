@@ -461,15 +461,30 @@ def _xlsx_parse_sheet_rows(
     shared: list[str],
     *,
     max_rows: int | None = None,
-) -> tuple[list[list[str]], int, int, int]:
-    """Return ``(rows, total_rows, max_cols, formula_count)``."""
-    rows: list[list[str]] = []
+) -> tuple[list[tuple[int, list[str]]], int, int, int, int]:
+    """Return ``(rows, populated_rows, max_row_num, max_cols, formula_count)``.
+
+    Each entry in ``rows`` is ``(row_num, cells)`` where ``row_num`` preserves
+    the worksheet's 1-based XML ``<row r="...">`` coordinate so sparse sheets
+    keep accurate Excel row addresses.
+    """
+    rows: list[tuple[int, list[str]]] = []
     total_rows = 0
+    prev_row = 0
+    max_row_num = 0
     max_cols = 0
     formulas = 0
     for elem in root.iter():
         if _local(elem.tag) != "row":
             continue
+        r_attr = elem.attrib.get("r", "").strip()
+        if r_attr and r_attr.isascii() and r_attr.isdigit() and int(r_attr) >= 1:
+            row_num = int(r_attr)
+        else:
+            row_num = prev_row + 1
+        prev_row = row_num
+        if row_num > max_row_num:
+            max_row_num = row_num
         total_rows += 1
         row_cells: dict[int, str] = {}
         col_cursor = 0
@@ -489,8 +504,8 @@ def _xlsx_parse_sheet_rows(
                     row_cells[col_idx] = val
         if max_rows is None or len(rows) < max_rows:
             width = min(max(row_cells) if row_cells else 0, 128)
-            rows.append([row_cells.get(i, "") for i in range(1, width + 1)])
-    return rows, total_rows, max_cols, formulas
+            rows.append((row_num, [row_cells.get(i, "") for i in range(1, width + 1)]))
+    return rows, total_rows, max_row_num, max_cols, formulas
 
 
 def _inspect_xlsx(zf: zipfile.ZipFile, data: bytes, fmt: str) -> dict[str, Any]:
@@ -512,13 +527,15 @@ def _inspect_xlsx(zf: zipfile.ZipFile, data: bytes, fmt: str) -> dict[str, Any]:
                 "headers": [],
             })
             continue
-        preview_rows, total_rows, max_cols, formulas = _xlsx_parse_sheet_rows(sroot, shared, max_rows=2)
-        headers = [h for h in (preview_rows[0] if preview_rows else []) if h][:12]
+        preview_rows, total_rows, max_row_num, max_cols, formulas = _xlsx_parse_sheet_rows(
+            sroot, shared, max_rows=2
+        )
+        headers = [h for h in (preview_rows[0][1] if preview_rows else []) if h][:12]
         sheet_summaries.append({
             "index": sh["index"],
             "name": sh["name"],
             "hidden": sh["hidden"],
-            "rows": total_rows,
+            "rows": max_row_num if max_row_num > total_rows else total_rows,
             "cols": max_cols,
             "formulas": formulas,
             "headers": headers,
@@ -1267,6 +1284,31 @@ def render_container_body(
 
 
 # ---------------------------------------------------------- --part extraction
+def _redact_full_text(text: str, policy: Any) -> str:
+    """Redact all secrets across ``text`` BEFORE any window is sliced,
+    preserving exact line count and line breaks (``mask_hits`` emits one
+    marker per line segment for multiline secrets like PEM private keys)."""
+    if not text or (policy is not None and not getattr(policy, "enabled", True)):
+        return text
+    from ctx.textutil import mask_hits, secret_hits
+
+    hits = secret_hits(text, 0, len(text), policy=policy)
+    if not hits:
+        return text
+    return mask_hits(text, 0, len(text), hits)
+
+
+def _redact_lines(lines: list[str], policy: Any) -> list[str]:
+    if not lines or (policy is not None and not getattr(policy, "enabled", True)):
+        return lines
+    full = "\n".join(lines)
+    masked = _redact_full_text(full, policy)
+    if masked == full:
+        return lines
+    out = masked.split("\n")
+    return out if len(out) == len(lines) else lines
+
+
 def _parse_range_suffix(spec: str, default_len: int) -> tuple[str, int, int]:
     """Split optional trailing ``:A:B`` from ``spec``."""
     m = re.match(r"^(.*):(\d+):(\d+)$", spec)
@@ -1315,9 +1357,112 @@ def _slice_lines(
     return label, "\n".join(chosen), cont
 
 
-def _extract_docx_part(zf: zipfile.ZipFile, part: str, max_lines: int, max_bytes: int) -> tuple[str, str, str | None]:
+def _parse_slides_spec(part: str) -> tuple[int, int, tuple[int, int] | None, bool]:
+    """Parse ``slide:<N>[:LA:LB]`` or ``slides:<A>:<B>[:LA:LB]``.
+
+    Returns ``(a, b, line_range, is_single_slide)``. When ``slides:A:B:LA:LB``
+    is given, ``line_range`` paginates within slide ``A`` and resumes the outer
+    range at ``slides:<A+1>:<next_b>`` once slide ``A`` completes.
+    """
+    if part.startswith("slide:"):
+        sm = re.fullmatch(r"slide:(\d+)(?::(\d+):(\d+))?", part)
+        if not sm:
+            raise ContainerError(
+                f"invalid slide selector {part!r}; use slide:<N>[:A:B] or slides:<A>:<B>[:LA:LB]"
+            )
+        idx = int(sm.group(1))
+        lr = (int(sm.group(2)), int(sm.group(3))) if sm.group(2) else (1, -1)
+        return idx, idx, lr, True
+    if part.startswith("slides:"):
+        sm = re.fullmatch(r"slides:(\d+):(\d+)(?::(\d+):(\d+))?", part)
+        if not sm:
+            raise ContainerError(
+                f"invalid slides selector {part!r}; use slides:<A>:<B> or slides:<A>:<B>:<LA>:<LB>"
+            )
+        a, b = int(sm.group(1)), int(sm.group(2))
+        lr = (int(sm.group(3)), int(sm.group(4))) if sm.group(3) else None
+        return a, b, lr, False
+    raise ContainerError(
+        f"unknown presentation --part {part!r}; use slide:<N>[:A:B] or slides:<A>:<B>[:LA:LB]"
+    )
+
+
+def _slice_slide_blocks(
+    slide_blocks: list[tuple[int, list[str]]],
+    total_slides: int,
+    a: int,
+    b: int,
+    line_range: tuple[int, int] | None,
+    is_single_slide: bool,
+    max_lines: int,
+    max_bytes: int,
+) -> tuple[str, str, str | None]:
+    """Budget-fit slide extraction with exact slide-level AND within-slide
+    line pagination, resuming the outer ``slides:`` chain once an oversized
+    slide finishes."""
+    if line_range is not None:
+        sl_idx, sl_lines = slide_blocks[0]
+        la, lb = line_range
+        if lb < 0:
+            lb = len(sl_lines)
+        prefix = f"slide:{sl_idx}" if is_single_slide else f"slides:{a}:{b}"
+        sub_lbl, sub_body, sub_cont = _slice_lines(
+            sl_lines, la, lb, prefix, max_lines, max_bytes
+        )
+        if sub_cont is None and not is_single_slide and sl_idx < total_slides:
+            span = b - a + 1
+            nxt_a = sl_idx + 1
+            nxt_b = min(total_slides, max(b, sl_idx + (span if span > 0 else 5)))
+            sub_cont = f"slides:{nxt_a}:{nxt_b}"
+        return sub_lbl, sub_body, sub_cont
+
+    cap_lines = bounds.count(max_lines)
+    emitted_blocks: list[str] = []
+    used_bytes = 0
+    used_lines = 0
+    shown_end = a - 1
+
+    for sl_idx, sl_lines in slide_blocks:
+        block_text = "\n".join(sl_lines)
+        cost_bytes = len(block_text.encode("utf-8", "replace")) + 1
+        cost_lines = len(sl_lines)
+        exceeds = cost_bytes > max_bytes or (cap_lines > 0 and cost_lines > cap_lines)
+        if not emitted_blocks and exceeds:
+            sub_lbl, sub_body, sub_cont = _slice_lines(
+                sl_lines, 1, len(sl_lines), f"slides:{a}:{b}", max_lines, max_bytes
+            )
+            if sub_cont is None and sl_idx < total_slides:
+                span = b - a + 1
+                nxt_a = sl_idx + 1
+                nxt_b = min(total_slides, max(b, sl_idx + (span if span > 0 else 5)))
+                sub_cont = f"slides:{nxt_a}:{nxt_b}"
+            return f"slide:{sl_idx} ({sub_lbl})", sub_body, sub_cont
+        if emitted_blocks and (
+            used_bytes + cost_bytes > max_bytes
+            or (cap_lines > 0 and used_lines + cost_lines > cap_lines)
+        ):
+            break
+        emitted_blocks.append(block_text)
+        used_bytes += cost_bytes
+        used_lines += cost_lines
+        shown_end = sl_idx
+
+    if shown_end < a:
+        shown_end = a
+    cont = None
+    if shown_end < total_slides:
+        span = shown_end - a + 1
+        nxt_a = shown_end + 1
+        nxt_b = min(total_slides, shown_end + (span if span > 0 else 5))
+        cont = f"slides:{nxt_a}:{nxt_b}"
+    return f"slides:{a}:{shown_end} of {fmt_int(total_slides)}", "\n".join(emitted_blocks), cont
+
+
+def _extract_docx_part(
+    zf: zipfile.ZipFile, part: str, policy: Any, max_lines: int, max_bytes: int
+) -> tuple[str, str, str | None]:
     budget = [MAX_TOTAL_DECOMPRESS]
-    if part == "comments":
+    if part == "comments" or part.startswith("comments:"):
         if "word/comments.xml" not in zf.namelist():
             return "comments (0)", "(no comments)", None
         croot = _parse_xml_safe(_read_zip_member(zf, "word/comments.xml", budget))
@@ -1337,16 +1482,35 @@ def _extract_docx_part(zf: zipfile.ZipFile, part: str, max_lines: int, max_bytes
                     date = v
             txt = " ".join(t.text.strip() for t in c.iter() if _local(t.tag) == "t" and t.text and t.text.strip())
             rows.append(f"[{author or 'unknown'}{' · ' + date if date else ''}] {txt}")
-        return _slice_lines(rows, 1, len(rows) or 1, "comments", max_lines, max_bytes)
+        rows = _redact_lines(rows, policy)
+        base, a, b = _parse_range_suffix(part, len(rows) or 1)
+        if base != "comments":
+            raise ContainerError(f"invalid comments selector {part!r}; use comments or comments:<A>:<B>")
+        return _slice_lines(rows, a, b, "comments", max_lines, max_bytes)
 
     doc_root = _parse_xml_safe(_read_zip_member(zf, "word/document.xml", budget))
     if doc_root is None:
         raise ContainerError("word/document.xml could not be parsed safely")
 
-    if part == "tables" or part.startswith("table:"):
+    if part == "tables" or part.startswith("tables:") or part.startswith("table:"):
+        want_idx: int | None = None
+        if part.startswith("table:"):
+            tm = re.fullmatch(r"table:(\d+)(?::(\d+):(\d+))?", part)
+            if not tm:
+                raise ContainerError(f"invalid table selector {part!r}; use table:<N> or table:<N>:<A>:<B>")
+            want_idx = int(tm.group(1))
+            part_prefix = f"table:{want_idx}"
+            req_a = int(tm.group(2)) if tm.group(2) else 1
+            req_b: int | None = int(tm.group(3)) if tm.group(3) else None
+        else:
+            base, req_a, parsed_b = _parse_range_suffix(part, -1)
+            if base != "tables":
+                raise ContainerError(f"invalid tables selector {part!r}; use tables or tables:<A>:<B>")
+            part_prefix = "tables"
+            req_b = None if parsed_b < 0 else parsed_b
+
         table_lines: list[str] = []
         t_idx = 0
-        want_idx = int(part.split(":", 1)[1]) if part.startswith("table:") and part.split(":", 1)[1].isdigit() else None
         for elem in doc_root.iter():
             if _local(elem.tag) != "tbl":
                 continue
@@ -1366,9 +1530,11 @@ def _extract_docx_part(zf: zipfile.ZipFile, part: str, max_lines: int, max_bytes
                 table_lines.append(" | ".join(cells))
         if not table_lines:
             raise ContainerError(f"no matching table for --part {part}")
-        return _slice_lines(table_lines, 1, len(table_lines), part, max_lines, max_bytes)
+        table_lines = _redact_lines(table_lines, policy)
+        b_eff = len(table_lines) if req_b is None else req_b
+        return _slice_lines(table_lines, req_a, b_eff, part_prefix, max_lines, max_bytes)
 
-    if part == "changes":
+    if part == "changes" or part.startswith("changes:"):
         ch_lines: list[str] = []
         for elem in doc_root.iter():
             tag = _local(elem.tag)
@@ -1379,12 +1545,17 @@ def _extract_docx_part(zf: zipfile.ZipFile, part: str, max_lines: int, max_bytes
                 ch_lines.append(f"{prefix} [{author or 'unknown'}] {txt}")
         if not ch_lines:
             return "changes (0)", "(no tracked changes)", None
-        return _slice_lines(ch_lines, 1, len(ch_lines), "changes", max_lines, max_bytes)
+        ch_lines = _redact_lines(ch_lines, policy)
+        base, a, b = _parse_range_suffix(part, len(ch_lines))
+        if base != "changes":
+            raise ContainerError(f"invalid changes selector {part!r}; use changes or changes:<A>:<B>")
+        return _slice_lines(ch_lines, a, b, "changes", max_lines, max_bytes)
 
     paragraphs, _, _, _ = _docx_paragraphs(doc_root)
+    redacted_texts = _redact_lines([p["text"] for p in paragraphs], policy)
     formatted = [
-        f"P{p['idx']}: {'#' * p['level'] + ' ' if p['level'] else ''}{p['text']}"
-        for p in paragraphs
+        f"P{p['idx']}: {'#' * p['level'] + ' ' if p['level'] else ''}{rtxt}"
+        for p, rtxt in zip(paragraphs, redacted_texts)
     ]
     if part.startswith("section:"):
         sec_str = part.split(":", 1)[1]
@@ -1402,16 +1573,20 @@ def _extract_docx_part(zf: zipfile.ZipFile, part: str, max_lines: int, max_bytes
         )
         return _slice_lines(formatted, start_p, end_p, "paragraphs", max_lines, max_bytes)
 
-    if part.startswith("paragraphs"):
-        _, a, b = _parse_range_suffix(part, 40)
+    if part == "paragraphs" or part.startswith("paragraphs:"):
+        base, a, b = _parse_range_suffix(part, 40)
+        if base != "paragraphs":
+            raise ContainerError(f"invalid paragraphs selector {part!r}; use paragraphs or paragraphs:<A>:<B>")
         return _slice_lines(formatted, a, b, "paragraphs", max_lines, max_bytes)
 
     raise ContainerError(
-        f"unknown docx --part {part!r}; use section:<N>, paragraphs:<A>:<B>, tables, comments, or changes"
+        f"unknown docx --part {part!r}; use section:<N>, paragraphs[:A:B], tables[:A:B], table:<N>[:A:B], comments[:A:B], or changes[:A:B]"
     )
 
 
-def _extract_xlsx_part(zf: zipfile.ZipFile, part: str, max_lines: int, max_bytes: int) -> tuple[str, str, str | None]:
+def _extract_xlsx_part(
+    zf: zipfile.ZipFile, part: str, policy: Any, max_lines: int, max_bytes: int
+) -> tuple[str, str, str | None]:
     if not part.startswith("sheet:"):
         raise ContainerError(f"unknown workbook --part {part!r}; use sheet:<name>[:A:B] or sheet:#<N>[:A:B]")
     budget = [MAX_TOTAL_DECOMPRESS]
@@ -1435,52 +1610,96 @@ def _extract_xlsx_part(zf: zipfile.ZipFile, part: str, max_lines: int, max_bytes
     sroot = _parse_xml_safe(_read_zip_member(zf, chosen["target"], budget))
     if sroot is None:
         raise ContainerError(f"sheet {chosen['name']!r} could not be parsed safely")
-    rows, _, _, _ = _xlsx_parse_sheet_rows(sroot, shared, max_rows=None)
-    formatted = [f"R{i}: " + "\t".join(r) for i, r in enumerate(rows, 1)]
-    return _slice_lines(formatted, a, b, f"sheet:#{chosen['index']}", max_lines, max_bytes)
+    rows, _, max_row_num, _, _ = _xlsx_parse_sheet_rows(sroot, shared, max_rows=None)
+    prefix = f"sheet:#{chosen['index']}"
+    if max_row_num == 0 or not rows:
+        return f"{prefix} (empty)", "(empty)", None
+    win = bounds.span(a, b, max_row_num)
+    if win is None:
+        raise ContainerError(
+            f"--part {prefix}:{a}:{b} selects nothing (worksheet rows run 1..{fmt_int(max_row_num)}); "
+            f"use --part {prefix}:1:{min(max_row_num, 50)}"
+        )
+    a, b = win
+    raw_lines = ["\t".join(cells) for _, cells in rows]
+    redacted_rows = _redact_lines(raw_lines, policy)
+    numbered = [(row_num, rtxt) for (row_num, _), rtxt in zip(rows, redacted_rows)]
+
+    in_range = [(rn, rtxt) for rn, rtxt in numbered if a <= rn <= b]
+    if not in_range:
+        nxt = next((rn for rn, _ in numbered if rn > b), None)
+        if nxt is not None:
+            span = b - a + 1
+            cont = f"{prefix}:{nxt}:{min(max_row_num, nxt + span - 1)}"
+            note = f"(no populated rows in R{a}:R{b}; next populated row is R{nxt})"
+        else:
+            cont = None
+            note = f"(no populated rows in R{a}:R{b})"
+        return f"{prefix}:{a}:{b} of {fmt_int(max_row_num)}", note, cont
+
+    cap_lines = bounds.count(max_lines)
+    chosen_lines: list[str] = []
+    used = 0
+    emitted_count = 0
+    last_emitted_row = a
+    for rn, rtxt in in_range:
+        if cap_lines > 0 and emitted_count >= cap_lines:
+            break
+        rendered = f"R{rn}: {rtxt}"
+        cost = len(rendered.encode("utf-8", "replace")) + 1
+        if chosen_lines and used + cost > max_bytes:
+            break
+        chosen_lines.append(rendered)
+        used += cost
+        emitted_count += 1
+        last_emitted_row = rn
+
+    trimmed = emitted_count < len(in_range)
+    actual_b = last_emitted_row if trimmed else b
+    cont = None
+    if trimmed:
+        next_row = in_range[emitted_count][0]
+        span = actual_b - a + 1
+        cont = f"{prefix}:{next_row}:{min(max_row_num, next_row + (span if span > 0 else 50) - 1)}"
+    elif b < max_row_num:
+        span = b - a + 1
+        nxt_a = b + 1
+        cont = f"{prefix}:{nxt_a}:{min(max_row_num, b + (span if span > 0 else 50))}"
+    return f"{prefix}:{a}:{actual_b} of {fmt_int(max_row_num)}", "\n".join(chosen_lines), cont
 
 
-def _extract_pptx_part(zf: zipfile.ZipFile, part: str, max_lines: int, max_bytes: int) -> tuple[str, str, str | None]:
+def _extract_pptx_part(
+    zf: zipfile.ZipFile, part: str, policy: Any, max_lines: int, max_bytes: int
+) -> tuple[str, str, str | None]:
     budget = [MAX_TOTAL_DECOMPRESS]
     targets = _pptx_slide_targets(zf, budget)
-    if part.startswith("slide:"):
-        s = part.split(":", 1)[1]
-        if not s.isdigit():
-            raise ContainerError(f"invalid slide selector {part!r}; use slide:<N> or slides:<A>:<B>")
-        a = b = int(s)
-    elif part.startswith("slides:"):
-        _, a, b = _parse_range_suffix(part, 5)
-    else:
-        raise ContainerError(f"unknown presentation --part {part!r}; use slide:<N> or slides:<A>:<B>")
+    a, b, line_range, is_single = _parse_slides_spec(part)
     win = bounds.span(a, b, len(targets))
     if win is None:
         raise ContainerError(f"slide range {a}:{b} out of range (deck has {len(targets)} slides)")
     a, b = win
-    lines: list[str] = []
-    for idx in range(a, b + 1):
+    slide_blocks: list[tuple[int, list[str]]] = []
+    scan_end = a if line_range is not None else b
+    for idx in range(a, scan_end + 1):
         det = _pptx_slide_detail(zf, targets[idx - 1], budget)
-        lines.append(f"=== Slide #{idx}: {det['title'] or '(untitled)'} ===")
+        raw_sl: list[str] = [f"=== Slide #{idx}: {det['title'] or '(untitled)'} ==="]
         for bul in det["bullets"]:
-            lines.append(f"  - {bul}")
+            raw_sl.append(f"  - {bul}")
         if det["tables"] or det["images"]:
-            lines.append(f"  [tables: {det['tables']}, images: {det['images']}]")
+            raw_sl.append(f"  [tables: {det['tables']}, images: {det['images']}]")
         if det["notes"]:
-            lines.append(f"  [notes] {det['notes']}")
-    out_lines: list[str] = []
-    used = 0
-    for ln in lines:
-        c = len(ln.encode("utf-8", "replace")) + 1
-        if out_lines and used + c > max_bytes:
-            break
-        out_lines.append(ln)
-        used += c
-    cont = f"slides:{b + 1}:{min(len(targets), b + (b - a + 1))}" if b < len(targets) else None
-    return f"slides:{a}:{b} of {len(targets)}", "\n".join(out_lines), cont
+            raw_sl.append(f"  [notes] {det['notes']}")
+        slide_blocks.append((idx, _redact_lines(raw_sl, policy)))
+    return _slice_slide_blocks(
+        slide_blocks, len(targets), a, b, line_range, is_single, max_lines, max_bytes
+    )
 
 
-def _extract_epub_part(zf: zipfile.ZipFile, part: str, max_lines: int, max_bytes: int) -> tuple[str, str, str | None]:
+def _extract_epub_part(
+    zf: zipfile.ZipFile, part: str, policy: Any, max_lines: int, max_bytes: int
+) -> tuple[str, str, str | None]:
     if part.startswith("member:"):
-        return _extract_zip_member_part(zf, part, max_lines, max_bytes)
+        return _extract_zip_member_part(zf, part, policy, max_lines, max_bytes)
     if not part.startswith("chapter:"):
         raise ContainerError(f"unknown epub --part {part!r}; use chapter:<N>[:A:B] or member:<path>[:A:B]")
     info = _inspect_epub(zf, b"")
@@ -1496,12 +1715,14 @@ def _extract_epub_part(zf: zipfile.ZipFile, part: str, max_lines: int, max_bytes
     raw_bytes = _read_zip_member(zf, member, [MAX_MEMBER_DECOMPRESS])
     if raw_bytes is None:
         raise ContainerError(f"cannot read epub chapter {member!r}")
-    plain = _html_to_text(raw_bytes)
+    plain = _redact_full_text(_html_to_text(raw_bytes), policy)
     lines = [f"L{i}: {ln}" for i, ln in enumerate(plain.splitlines(), 1)]
     return _slice_lines(lines, a, b, f"chapter:{idx}", max_lines, max_bytes)
 
 
-def _extract_zip_member_part(zf: zipfile.ZipFile, part: str, max_lines: int, max_bytes: int) -> tuple[str, str, str | None]:
+def _extract_zip_member_part(
+    zf: zipfile.ZipFile, part: str, policy: Any, max_lines: int, max_bytes: int
+) -> tuple[str, str, str | None]:
     if not part.startswith("member:"):
         raise ContainerError(f"unknown archive --part {part!r}; use member:<path>[:A:B]")
     rest = part[len("member:"):]
@@ -1516,11 +1737,14 @@ def _extract_zip_member_part(zf: zipfile.ZipFile, part: str, max_lines: int, max
 
         binfo = binfmt.inspect(raw_bytes)
         return f"member:{mpath} (binary)", binfmt.render_digest(binfo), None
-    lines = [f"L{i}: {ln}" for i, ln in enumerate(raw_bytes.decode("utf-8", "replace").splitlines(), 1)]
+    decoded = _redact_full_text(raw_bytes.decode("utf-8", "replace"), policy)
+    lines = [f"L{i}: {ln}" for i, ln in enumerate(decoded.splitlines(), 1)]
     return _slice_lines(lines, a, b, f"member:{mpath}", max_lines, max_bytes)
 
 
-def _extract_tar_part(data: bytes, fmt: str, part: str, max_lines: int, max_bytes: int) -> tuple[str, str, str | None]:
+def _extract_tar_part(
+    data: bytes, fmt: str, part: str, policy: Any, max_lines: int, max_bytes: int
+) -> tuple[str, str, str | None]:
     if not part.startswith("member:"):
         raise ContainerError(f"unknown tar --part {part!r}; use member:<path>[:A:B]")
     rest = part[len("member:"):]
@@ -1545,11 +1769,14 @@ def _extract_tar_part(data: bytes, fmt: str, part: str, max_lines: int, max_byte
         from ctx import binfmt
 
         return f"member:{mpath} (binary)", binfmt.render_digest(binfmt.inspect(raw_bytes)), None
-    lines = [f"L{i}: {ln}" for i, ln in enumerate(raw_bytes.decode("utf-8", "replace").splitlines(), 1)]
+    decoded = _redact_full_text(raw_bytes.decode("utf-8", "replace"), policy)
+    lines = [f"L{i}: {ln}" for i, ln in enumerate(decoded.splitlines(), 1)]
     return _slice_lines(lines, a, b, f"member:{mpath}", max_lines, max_bytes)
 
 
-def _extract_sqlite_part(data: bytes, part: str, max_lines: int, max_bytes: int) -> tuple[str, str, str | None]:
+def _extract_sqlite_part(
+    data: bytes, part: str, policy: Any, max_lines: int, max_bytes: int
+) -> tuple[str, str, str | None]:
     if not (part.startswith("schema:") or part.startswith("table:")):
         raise ContainerError(f"unknown sqlite --part {part!r}; use schema:<name> or table:<name>[:A:B]")
     with tempfile.TemporaryDirectory(prefix="ctx-sqlite-") as tmpdir:
@@ -1569,7 +1796,7 @@ def _extract_sqlite_part(data: bytes, part: str, max_lines: int, max_bytes: int)
                 ddls = [str(r[0]) for r in cur.fetchall()]
                 if not ddls:
                     raise ContainerError(f"sqlite table/view {tname!r} not found")
-                return f"schema:{tname}", "\n\n".join(ddls), None
+                return f"schema:{tname}", _redact_full_text("\n\n".join(ddls), policy), None
             rest = part[len("table:"):]
             tname, a, b = _parse_range_suffix(rest, 50)
             cur.execute(
@@ -1583,7 +1810,8 @@ def _extract_sqlite_part(data: bytes, part: str, max_lines: int, max_bytes: int)
             col_names = [str(r[1]) for r in cur.fetchall()]
             if a < 1 or b < a:
                 raise ContainerError(f"invalid row range {a}:{b}; use 1-based A:B with A <= B")
-            want = min(b - a + 1, bounds.count(max_lines) or 50, 200)
+            cap = bounds.count(max_lines)
+            want = min(b - a + 1, cap if cap > 0 else 50, 200)
             cur.execute(f"SELECT * FROM {qname} LIMIT ? OFFSET ?", (want + 1, a - 1))
             fetched = cur.fetchall()
             has_more = len(fetched) > want
@@ -1594,7 +1822,11 @@ def _extract_sqlite_part(data: bytes, part: str, max_lines: int, max_bytes: int)
             used = len(lines[0].encode("utf-8")) + 1 if lines else 0
             shown = 0
             for idx, r in enumerate(rows, a):
-                row_txt = f"R{idx}: " + "\t".join("NULL" if v is None else one_line(str(v)) for v in r)
+                cells_txt = [
+                    "NULL" if v is None else one_line(_redact_full_text(str(v), policy))
+                    for v in r
+                ]
+                row_txt = f"R{idx}: " + "\t".join(cells_txt)
                 cost = len(row_txt.encode("utf-8", "replace")) + 1
                 if shown > 0 and used + cost > max_bytes:
                     has_more = True
@@ -1631,43 +1863,48 @@ def extract_part(
         raise ContainerError("--part cannot be empty")
     fmt = sniff_container(data)
     if fmt is None:
-        # Check for Jupyter .ipynb notebook (--part cell:N / cells:A:B).
+        # Check for Jupyter .ipynb notebook (--part cell:N[:A:B] / cells:A:B).
         if spec.startswith(("cell:", "cells:")):
             from ctx.digest.nbprof import extract_notebook_part
 
-            return extract_notebook_part(data, spec, max_lines=max_lines, max_bytes=max_bytes)
+            return extract_notebook_part(
+                data, spec, policy=policy, max_lines=max_lines, max_bytes=max_bytes
+            )
         raise ContainerError(
             "--part is supported for Office/ODF/EPUB documents, archives, SQLite databases, "
             "and Jupyter notebooks; for plain text use --lines or --json-pointer"
         )
     if fmt == "sqlite":
-        return _extract_sqlite_part(data, spec, max_lines, max_bytes)
+        return _extract_sqlite_part(data, spec, policy, max_lines, max_bytes)
     if fmt in ("tar", "tar.gz"):
-        return _extract_tar_part(data, fmt, spec, max_lines, max_bytes)
+        return _extract_tar_part(data, fmt, spec, policy, max_lines, max_bytes)
     if fmt == "gzip":
         if not spec.startswith("raw"):
             raise ContainerError(f"unknown gzip --part {spec!r}; use raw[:A:B]")
-        _, a, b = _parse_range_suffix(spec, 100)
+        base, a, b = _parse_range_suffix(spec, 100)
+        if base != "raw":
+            raise ContainerError(f"unknown gzip --part {spec!r}; use raw[:A:B]")
         decompressed, _ = _gzip_peek(data, MAX_MEMBER_DECOMPRESS)
         if decompressed is None:
             raise ContainerError("cannot decompress gzip stream")
         if b"\x00" in decompressed[:4096]:
             raise ContainerError("gzip payload is binary; use --bytes on a decompressed run")
-        lines = [f"L{i}: {ln}" for i, ln in enumerate(decompressed.decode("utf-8", "replace").splitlines(), 1)]
+        decoded = _redact_full_text(decompressed.decode("utf-8", "replace"), policy)
+        lines = [f"L{i}: {ln}" for i, ln in enumerate(decoded.splitlines(), 1)]
         return _slice_lines(lines, a, b, "raw", max_lines, max_bytes)
     try:
         with zipfile.ZipFile(io.BytesIO(data), "r") as zf:
             if fmt == "docx":
-                return _extract_docx_part(zf, spec, max_lines, max_bytes)
+                return _extract_docx_part(zf, spec, policy, max_lines, max_bytes)
             if fmt in ("xlsx", "xlsm"):
-                return _extract_xlsx_part(zf, spec, max_lines, max_bytes)
+                return _extract_xlsx_part(zf, spec, policy, max_lines, max_bytes)
             if fmt == "pptx":
-                return _extract_pptx_part(zf, spec, max_lines, max_bytes)
+                return _extract_pptx_part(zf, spec, policy, max_lines, max_bytes)
             if fmt == "epub":
-                return _extract_epub_part(zf, spec, max_lines, max_bytes)
+                return _extract_epub_part(zf, spec, policy, max_lines, max_bytes)
             if fmt in ("odt", "ods", "odp"):
                 if spec.startswith("member:"):
-                    return _extract_zip_member_part(zf, spec, max_lines, max_bytes)
+                    return _extract_zip_member_part(zf, spec, policy, max_lines, max_bytes)
                 raw_xml = _read_zip_member(zf, "content.xml", [MAX_MEMBER_DECOMPRESS])
                 root = _parse_xml_safe(raw_xml)
                 if root is None:
@@ -1690,35 +1927,33 @@ def extract_part(
                                 break
                     if chosen_el is None:
                         raise ContainerError(f"ods sheet {target_key!r} not found")
-                    rows_out: list[str] = []
+                    raw_rows: list[str] = []
                     for row_el in chosen_el:
                         if _local(row_el.tag) != "table-row":
                             continue
                         cells = ["".join(c.itertext()).strip() for c in row_el if _local(c.tag) == "table-cell"]
                         if any(cells):
-                            rows_out.append(f"R{len(rows_out) + 1}: " + "\t".join(cells))
+                            raw_rows.append("\t".join(cells))
+                    rows_out = [f"R{i}: {ln}" for i, ln in enumerate(_redact_lines(raw_rows, policy), 1)]
                     return _slice_lines(rows_out, a, b, f"sheet:#{chosen_idx}", max_lines, max_bytes)
                 if fmt == "odp" and (spec.startswith("slide:") or spec.startswith("slides:")):
                     pages = [e for e in root.iter() if _local(e.tag) == "page"]
-                    if spec.startswith("slide:"):
-                        s_num = spec.split(":", 1)[1]
-                        if not s_num.isdigit():
-                            raise ContainerError(f"invalid slide selector {spec!r}")
-                        a = b = int(s_num)
-                    else:
-                        _, a, b = _parse_range_suffix(spec, 5)
+                    a, b, line_range, is_single = _parse_slides_spec(spec)
                     win = bounds.span(a, b, len(pages))
                     if win is None:
                         raise ContainerError(f"slide range {a}:{b} out of range (1..{len(pages)})")
                     a, b = win
-                    sl_lines: list[str] = []
-                    for idx in range(a, b + 1):
+                    odp_blocks: list[tuple[int, list[str]]] = []
+                    scan_end = a if line_range is not None else b
+                    for idx in range(a, scan_end + 1):
                         txts = ["".join(p.itertext()).strip() for p in pages[idx - 1].iter() if _local(p.tag) == "p" and "".join(p.itertext()).strip()]
-                        sl_lines.append(f"=== Slide #{idx}: {txts[0] if txts else '(untitled)'} ===")
+                        raw_sl = [f"=== Slide #{idx}: {txts[0] if txts else '(untitled)'} ==="]
                         for bul in txts[1:]:
-                            sl_lines.append(f"  - {bul}")
-                    cont = f"slides:{b + 1}:{min(len(pages), b + (b - a + 1))}" if b < len(pages) else None
-                    return f"slides:{a}:{b} of {len(pages)}", "\n".join(sl_lines), cont
+                            raw_sl.append(f"  - {bul}")
+                        odp_blocks.append((idx, _redact_lines(raw_sl, policy)))
+                    return _slice_slide_blocks(
+                        odp_blocks, len(pages), a, b, line_range, is_single, max_lines, max_bytes
+                    )
                 # ODT section:N or paragraphs:A:B
                 paras: list[tuple[int | None, str]] = []
                 for elem in root.iter():
@@ -1732,7 +1967,11 @@ def extract_part(
                         t = "".join(elem.itertext()).strip()
                         if t:
                             paras.append((None, t))
-                formatted = [f"P{i}: {'#' * lv + ' ' if lv else ''}{tx}" for i, (lv, tx) in enumerate(paras, 1)]
+                redacted_p = _redact_lines([tx for _, tx in paras], policy)
+                formatted = [
+                    f"P{i}: {'#' * lv + ' ' if lv else ''}{rtx}"
+                    for i, ((lv, _), rtx) in enumerate(zip(paras, redacted_p), 1)
+                ]
                 if spec.startswith("section:"):
                     s_num = spec.split(":", 1)[1]
                     if not s_num.isdigit():
@@ -1746,7 +1985,7 @@ def extract_part(
                     return _slice_lines(formatted, st_p, en_p, "paragraphs", max_lines, max_bytes)
                 _, a, b = _parse_range_suffix(spec, 50)
                 return _slice_lines(formatted, a, b, "paragraphs", max_lines, max_bytes)
-            return _extract_zip_member_part(zf, spec, max_lines, max_bytes)
+            return _extract_zip_member_part(zf, spec, policy, max_lines, max_bytes)
     except ContainerError:
         raise
     except (zipfile.BadZipFile, OSError, zlib.error, RuntimeError, ValueError) as exc:

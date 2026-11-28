@@ -385,3 +385,191 @@ def test_pretooluse_whole_file_outlines_for_knowledge_work_files(tmp_path, monke
 
     # Hook self-approval accepts `ctx get ... --part ...`
     assert hook.ctx_read_kind(["get", "run:abcdef123456#stdout", "--part", "sheet:#1:1:50"]) == "store"
+
+
+def test_pr68_review_fixes_multiline_pem_pagination_and_sparse_xlsx(tmp_path, monkeypatch):
+    """Regression coverage for all 5 PR #68 review findings."""
+    root, ws, store = _make_env(tmp_path, monkeypatch)
+
+    # 1. [P1] Multiline PEM private key inside a ZIP member must be redacted
+    #    BEFORE slicing when selecting interior lines (e.g. lines 2:4).
+    key_body = "MIIEvQIBADANBgkqhkiG9w0BAQEFAASCBKcwggSjAgEAAoIBAQC7secretBodyLine"
+    pem = (
+        "-----BEGIN PRIVATE KEY-----\n"
+        f"{key_body}1\n"
+        f"{key_body}2\n"
+        f"{key_body}3\n"
+        "-----END PRIVATE KEY-----\n"
+        "public_footer = ok\n"
+    )
+    zbuf = io.BytesIO()
+    with zipfile.ZipFile(zbuf, "w", zipfile.ZIP_DEFLATED) as zf:
+        zf.writestr("certs/key.pem", pem)
+    zrec = intake.intake_bytes(store, ws, zbuf.getvalue(), label="file", name="certs.zip")
+    mid = ctx_get(store, ws, zrec.address, Selector(part="member:certs/key.pem:2:4"))
+    assert key_body not in mid and "[ctx:redacted:private-key:" in mid
+    foot = ctx_get(store, ws, zrec.address, Selector(part="member:certs/key.pem:6:6"))
+    assert "public_footer = ok" in foot
+
+    # 2. [P2] DOCX comments/changes/tables/table:N accept continuation ranges
+    #    and preserve table identity.
+    dbuf = io.BytesIO()
+    with zipfile.ZipFile(dbuf, "w", zipfile.ZIP_DEFLATED) as zf:
+        t1_rows = "".join(
+            f"<w:tr><w:tc><w:p><w:r><w:t>T1Row{i}</w:t></w:r></w:p></w:tc></w:tr>" for i in range(1, 30)
+        )
+        t2_rows = "".join(
+            f"<w:tr><w:tc><w:p><w:r><w:t>T2Row{i} {'x' * 220}</w:t></w:r></w:p></w:tc></w:tr>" for i in range(1, 40)
+        )
+        ins_xml = "".join(
+            f'<w:p><w:ins w:author="Ada"><w:r><w:t>Change {i} {"y" * 220}</w:t></w:r></w:ins></w:p>'
+            for i in range(1, 35)
+        )
+        zf.writestr(
+            "word/document.xml",
+            '<?xml version="1.0"?><w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body>'
+            f"<w:tbl>{t1_rows}</w:tbl><w:tbl>{t2_rows}</w:tbl>{ins_xml}</w:body></w:document>",
+        )
+        cmts = "".join(
+            f'<w:comment w:id="{i}" w:author="Sam"><w:p><w:r><w:t>Comment {i} {"z" * 220}</w:t></w:r></w:p></w:comment>'
+            for i in range(1, 35)
+        )
+        zf.writestr(
+            "word/comments.xml",
+            '<?xml version="1.0"?><w:comments xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">'
+            f"{cmts}</w:comments>",
+        )
+    drec = intake.intake_bytes(store, ws, dbuf.getvalue(), label="file", name="big.docx")
+
+    def _next_part(out_text: str, prefix: str) -> str:
+        hits = [
+            ln.split("--part ", 1)[1].strip()
+            for ln in out_text.splitlines()
+            if ln.strip().startswith(("next:", "ctx get ")) and f"--part {prefix}" in ln
+        ]
+        assert hits, f"no next --part {prefix} in:\n{out_text}"
+        return hits[0]
+
+    c_page1 = ctx_get(store, ws, drec.address, Selector(part="comments"))
+    c_next = _next_part(c_page1, "comments:")
+    c_page2 = ctx_get(store, ws, drec.address, Selector(part=c_next))
+    assert "Comment 20" in c_page2 or "Comment " in c_page2
+
+    ch_page1 = ctx_get(store, ws, drec.address, Selector(part="changes"))
+    ch_next = _next_part(ch_page1, "changes:")
+    ch_page2 = ctx_get(store, ws, drec.address, Selector(part=ch_next))
+    assert "Change " in ch_page2
+
+    t2_page1 = ctx_get(store, ws, drec.address, Selector(part="table:2"))
+    assert "T2Row1" in t2_page1 and "T1Row1" not in t2_page1
+    t2_next = _next_part(t2_page1, "table:2:")
+    t2_page2 = ctx_get(store, ws, drec.address, Selector(part=t2_next))
+    assert "T2Row" in t2_page2 and "T1Row" not in t2_page2
+
+    # 3. [P2] Notebook within-cell pagination resumes outer cells:1:2 chain to cell 2.
+    huge_cell_src = [f"x_{i} = {i}  # padding line\n" for i in range(1, 350)]
+    nb = {
+        "nbformat": 4,
+        "nbformat_minor": 5,
+        "metadata": {"kernelspec": {"display_name": "Python 3.12"}},
+        "cells": [
+            {"cell_type": "code", "execution_count": 1, "metadata": {}, "source": huge_cell_src, "outputs": []},
+            {"cell_type": "markdown", "metadata": {}, "source": ["# Cell Two\n"]},
+        ],
+    }
+    nrec = intake.intake_bytes(store, ws, json.dumps(nb).encode(), label="file", name="huge.ipynb")
+    nb_pages: list[str] = []
+    cur_part: str | None = "cells:1:2"
+    for _ in range(10):
+        assert cur_part is not None
+        pg = ctx_get(store, ws, nrec.address, Selector(part=cur_part))
+        nb_pages.append(pg)
+        nexts = [
+            ln.split("--part ", 1)[1].strip()
+            for ln in pg.splitlines()
+            if ln.strip().startswith(("next:", "ctx get ")) and "--part " in ln
+        ]
+        cur_part = nexts[0] if nexts else None
+        if cur_part is None:
+            break
+    assert len(nb_pages) >= 3  # paginates within cell 1, then resumes to cell 2
+    assert any("x_349" in p for p in nb_pages) and any("# Cell Two" in p for p in nb_pages)
+
+    # 4. [P2] PPTX slide continuations paginate within dense slide 1 AND resume to slide 2.
+    pbuf = io.BytesIO()
+    with zipfile.ZipFile(pbuf, "w", zipfile.ZIP_DEFLATED) as zf:
+        zf.writestr(
+            "ppt/presentation.xml",
+            '<?xml version="1.0"?><p:presentation xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main" '
+            'xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><p:sldIdLst>'
+            '<p:sldId id="256" r:id="rId1"/><p:sldId id="257" r:id="rId2"/></p:sldIdLst></p:presentation>',
+        )
+        zf.writestr(
+            "ppt/_rels/presentation.xml.rels",
+            '<?xml version="1.0"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'
+            '<Relationship Id="rId1" Target="slides/slide1.xml"/>'
+            '<Relationship Id="rId2" Target="slides/slide2.xml"/></Relationships>',
+        )
+        heavy_bullets = "".join(
+            f'<a:p><a:r><a:t>Detailed bullet {i}: {"metrics " * 30}</a:t></a:r></a:p>' for i in range(1, 40)
+        )
+        zf.writestr(
+            "ppt/slides/slide1.xml",
+            '<?xml version="1.0"?><p:sld xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main" '
+            'xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><p:cSld><p:spTree>'
+            f'<p:sp><p:txBody><a:p><a:r><a:t>Dense Slide 1</a:t></a:r></a:p>{heavy_bullets}</p:txBody></p:sp>'
+            "</p:spTree></p:cSld></p:sld>",
+        )
+        zf.writestr(
+            "ppt/slides/slide2.xml",
+            '<?xml version="1.0"?><p:sld xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main" '
+            'xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><p:cSld><p:spTree>'
+            '<p:sp><p:txBody><a:p><a:r><a:t>Slide 2 Summary</a:t></a:r></a:p></p:txBody></p:sp>'
+            "</p:spTree></p:cSld></p:sld>",
+        )
+    prec = intake.intake_bytes(store, ws, pbuf.getvalue(), label="file", name="dense.pptx")
+    sl_pages: list[str] = []
+    cur_part = "slides:1:2"
+    for _ in range(10):
+        assert cur_part is not None
+        pg = ctx_get(store, ws, prec.address, Selector(part=cur_part))
+        sl_pages.append(pg)
+        nexts = [
+            ln.split("--part ", 1)[1].strip()
+            for ln in pg.splitlines()
+            if ln.strip().startswith(("next:", "ctx get ")) and "--part " in ln
+        ]
+        cur_part = nexts[0] if nexts else None
+        if cur_part is None:
+            break
+    assert "slides:1:2 of 2" not in sl_pages[0]
+    assert len(sl_pages) >= 3
+    assert any("Detailed bullet 39" in p for p in sl_pages) and any("Slide 2 Summary" in p for p in sl_pages)
+
+    # 5. [P2] Sparse XLSX preserves XML row coordinates (A1 + A10 -> R1, R10; sheet:#1:10:10 works).
+    xbuf = io.BytesIO()
+    with zipfile.ZipFile(xbuf, "w", zipfile.ZIP_DEFLATED) as zf:
+        zf.writestr(
+            "xl/workbook.xml",
+            '<?xml version="1.0"?><workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" '
+            'xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets>'
+            '<sheet name="Sparse" sheetId="1" state="visible" r:id="rId1"/></sheets></workbook>',
+        )
+        zf.writestr(
+            "xl/_rels/workbook.xml.rels",
+            '<?xml version="1.0"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'
+            '<Relationship Id="rId1" Target="worksheets/sheet1.xml"/></Relationships>',
+        )
+        zf.writestr(
+            "xl/worksheets/sheet1.xml",
+            '<?xml version="1.0"?><worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">'
+            '<sheetData><row r="1"><c r="A1" t="inlineStr"><is><t>HeaderA1</t></is></c></row>'
+            '<row r="10"><c r="A10" t="inlineStr"><is><t>ValueA10</t></is></c></row></sheetData></worksheet>',
+        )
+    xrec = intake.intake_bytes(store, ws, xbuf.getvalue(), label="file", name="sparse.xlsx")
+    all_rows = ctx_get(store, ws, xrec.address, Selector(part="sheet:#1:1:10"))
+    assert "R1: HeaderA1" in all_rows and "R10: ValueA10" in all_rows and "R2: ValueA10" not in all_rows
+    row10 = ctx_get(store, ws, xrec.address, Selector(part="sheet:#1:10:10"))
+    assert "R10: ValueA10" in row10
+    gap = ctx_get(store, ws, xrec.address, Selector(part="sheet:#1:2:5"))
+    assert "next populated row is R10" in gap and "--part sheet:#1:10:" in gap
