@@ -830,4 +830,76 @@ class DelimitedDataProfile(Profile):
         return text
 
 
-__all__ = ["DelimitedDataProfile", "read_table", "sniff", "cell_kind"]
+def outline_file(
+    path_str: str,
+    policy,
+    *,
+    max_bytes: int = 2 * 1024 * 1024,
+    max_columns: int = 24,
+) -> str | None:
+    """Bounded column/type/sample outline for a whole-file read of a large
+    CSV/TSV file, or None when the file does not sniff as delimited data."""
+    try:
+        with open(path_str, "rb") as fh:
+            data = fh.read(max_bytes + 1)
+    except OSError:
+        return None
+    if not data or b"\x00" in data[:4096]:
+        return None
+    partial = len(data) > max_bytes
+    if partial:
+        data = data[:max_bytes]
+    text = mappable_text(data.decode("utf-8", "replace"), not partial)
+    cands = sniff(text)
+    if not cands:
+        return None
+    cand = cands[0]
+    table = read_table(text, cand.delimiter, cand.columns)
+    if table.records < 2:
+        return None
+    ncols = table.columns
+    first_row = table.first_rows[0][0] if table.first_rows else []
+    body = table.sample
+    names_guess = [f"col{j + 1}" for j in range(min(ncols, MAX_COLUMNS))]
+    stats = analyse(body, names_guess, None)
+    header = looks_like_header(first_row, stats, body, ncols)
+    if header:
+        for j, st in enumerate(stats):
+            label = first_row[j] if j < len(first_row) and first_row[j].strip() else ""
+            st.name = label or st.name
+    elif table.first_rows:
+        full_first = [_stored(c) for c in first_row[:MAX_COLUMNS]]
+        stats = analyse(body, names_guess, full_first)
+    q = Quoter(48, policy)
+    dname = DELIMITER_NAMES.get(cand.delimiter, repr(cand.delimiter))
+    lines = [
+        f"delimited ({dname}): {fmt_int(table.records)} records × {fmt_int(cand.columns)} columns"
+        + (" (partial scan)" if partial else "")
+    ]
+    cap = bounds.count(max_columns)
+    shown = stats[:cap]
+    lines.append(f"columns ({len(shown)} of {fmt_int(len(stats))} shown):")
+    for j, st in enumerate(shown, 1):
+        bits = [f"{j} {q(st.name, 32)}", st.kind]
+        if st.cells:
+            bits.append("empty " + pct(st.empty, st.cells))
+        if st.kind in ("int", "float") and st.lo != "":
+            bits.append(f"range {st.lo[:24]} .. {st.hi[:24]}")
+        elif st.kind in ("date", "datetime") and st.lo != "":
+            bits.append(f"range {q(st.lo, 28)} .. {q(st.hi, 28)}")
+        lines.append("  " + " · ".join(bits))
+    if len(stats) > len(shown):
+        lines.append(f"  … +{fmt_int(len(stats) - len(shown))} more columns omitted")
+    if table.first_rows:
+        lines.append("sample rows:")
+        for cells, la, lb in table.first_rows[:3]:
+            tag = " (header)" if header and la == table.first_rows[0][1] else ""
+            lines.append(
+                f"  L{la}{'-L' + str(lb) if lb != la else ''}{tag} "
+                + DelimitedDataProfile._row(q, cells, cand.columns, 32)
+            )
+    lines.extend(q.note())
+    return "\n".join(lines)
+
+
+__all__ = ["DelimitedDataProfile", "outline_file", "read_table", "sniff", "cell_kind"]

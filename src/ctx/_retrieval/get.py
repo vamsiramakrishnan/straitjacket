@@ -36,6 +36,7 @@ class Selector:
     bytes: tuple[int, int] | None = None
     records: tuple[int, int] | None = None
     json_pointer: str | None = None
+    part: str | None = None  # structured container/notebook part (sheet:, slide:, section:, cell:, table:, member:)
     symbol: str | None = None  # Python: dotted def/class name via stdlib ast
     span: str | None = None  # opaque span token minted by a digest (SPEC §6.4)
     #: Content the caller asserts is at ``lines`` (see ``ctx.anchors``). Set
@@ -350,6 +351,7 @@ def _get(
     # ref kind rather than strong on some addresses and absent on others.
     needs_full_scan = (
         selector.json_pointer is not None
+        or selector.part is not None
         or selector.records is not None
         or selector.lines_anchor is not None
     )
@@ -507,7 +509,26 @@ def _get(
             lines=span, hashlines=selector.hashlines, snapcompact=selector.snapcompact
         )
 
-    if selector.json_pointer is not None:
+    if selector.part is not None:
+        from ctx.containers import ContainerError, _shell_part_arg, extract_part
+
+        part_budget = bounds.budget_bytes(eff_rtok) - _HEADER_RESERVE
+        if part_budget < 512:
+            part_budget = 512
+        try:
+            part_label, body, next_part = extract_part(
+                data,
+                selector.part,
+                policy=ws.config.redaction,
+                max_lines=budget.max_inline_lines,
+                max_bytes=part_budget,
+            )
+        except ContainerError as e:
+            raise RetrievalError(str(e)) from None
+        header.append(f"selector: --part {part_label}")
+        if next_part:
+            continuation = f"ctx get {ref_text} --part {_shell_part_arg(next_part)}"
+    elif selector.json_pointer is not None:
         try:
             from ctx.textutil import loads_fast
 
@@ -730,6 +751,10 @@ def _get(
         handle = f"{ref_text} --bytes {selector.bytes[0]}:{selector.bytes[1]}"
     elif selector.records is not None:
         handle = f"{ref_text} --records {selector.records[0]}:{selector.records[1]}"
+    elif selector.part is not None:
+        from ctx.containers import _shell_part_arg
+
+        handle = f"{ref_text} --part {_shell_part_arg(selector.part)}"
     elif selector.json_pointer is not None:
         # was falling through to the bare ref, dropping --json-pointer from the continuation
         handle = f"{ref_text} --json-pointer {selector.json_pointer}"

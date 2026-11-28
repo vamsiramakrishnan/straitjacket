@@ -90,7 +90,7 @@ TOOL_SCHEMA: dict[str, Any] = {
             },
             "selector": {
                 "type": "object",
-                "description": "get selector: {lines:'A:B'|'A:B@anchor'} | {bytes:'A:B'} | {records:'A:B'} | {jsonPointer:'/a/0'} | {symbol:'Cls.meth'} | {span:'<token from digest>'} | {hashlines:true} | {snapcompact:true}. An anchored repo: line span verifies the content is still there, follows it if it moved, and refuses if it is gone. snapcompact renders the selected slice as a monospace bitmap PNG and returns a blob: ref instead of text (opt-in; requires the `image` extra).",
+                "description": "get selector: {lines:'A:B'|'A:B@anchor'} | {bytes:'A:B'} | {records:'A:B'} | {jsonPointer:'/a/0'} | {part:'sheet:#1:1:50'|'slide:1'|'section:1'|'cell:1'|'table:name:1:50'|'member:path'} | {symbol:'Cls.meth'} | {span:'<token from digest>'} | {hashlines:true} | {snapcompact:true}. An anchored repo: line span verifies the content is still there, follows it if it moved, and refuses if it is gone. snapcompact renders the selected slice as a monospace bitmap PNG and returns a blob: ref instead of text (opt-in; requires the `image` extra).",
             },
             "options": {
                 "type": "object",
@@ -230,6 +230,7 @@ def dispatch_bounded(ws, store, args: dict[str, Any], *, runtime=None) -> str:
             bytes=_span(sel_raw["bytes"]) if sel_raw.get("bytes") else None,
             records=_span(sel_raw["records"]) if sel_raw.get("records") else None,
             json_pointer=sel_raw.get("jsonPointer"),
+            part=sel_raw.get("part"),
             symbol=sel_raw.get("symbol"),
             span=sel_raw.get("span"),
         )

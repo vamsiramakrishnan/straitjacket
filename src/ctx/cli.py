@@ -505,6 +505,10 @@ def _build_parser():
     p_get.add_argument("--bytes", help="A:B byte span")
     p_get.add_argument("--records", help="A:B record span (JSONL)")
     p_get.add_argument("--json-pointer", dest="json_pointer", help="RFC 6901 pointer")
+    p_get.add_argument(
+        "--part",
+        help="structured container/notebook part (e.g. sheet:#1:1:50, slide:1, section:1, cell:1, table:users:1:50, member:path)",
+    )
     p_get.add_argument("--symbol", help="Python def/class dotted name (stdlib ast)")
     p_get.add_argument("--span", help="opaque span token minted by a digest")
     p_get.add_argument(
