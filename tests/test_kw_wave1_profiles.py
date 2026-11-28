@@ -466,8 +466,8 @@ def test_pr68_review_fixes_multiline_pem_pagination_and_sparse_xlsx(tmp_path, mo
     t2_page2 = ctx_get(store, ws, drec.address, Selector(part=t2_next))
     assert "T2Row" in t2_page2 and "T1Row" not in t2_page2
 
-    # 3. [P2] Notebook within-cell pagination when cell 1 exceeds max_lines/max_bytes.
-    huge_cell_src = [f"x_{i} = {i}  # padding line\n" for i in range(1, 600)]
+    # 3. [P2] Notebook within-cell pagination resumes outer cells:1:2 chain to cell 2.
+    huge_cell_src = [f"x_{i} = {i}  # padding line\n" for i in range(1, 350)]
     nb = {
         "nbformat": 4,
         "nbformat_minor": 5,
@@ -478,12 +478,24 @@ def test_pr68_review_fixes_multiline_pem_pagination_and_sparse_xlsx(tmp_path, mo
         ],
     }
     nrec = intake.intake_bytes(store, ws, json.dumps(nb).encode(), label="file", name="huge.ipynb")
-    p1 = ctx_get(store, ws, nrec.address, Selector(part="cells:1:2"))
-    nb_next = _next_part(p1, "cell:1:")  # paginates WITHIN cell 1 instead of skipping to cells:2:2
-    p2 = ctx_get(store, ws, nrec.address, Selector(part=nb_next))
-    assert "x_" in p2
+    nb_pages: list[str] = []
+    cur_part: str | None = "cells:1:2"
+    for _ in range(10):
+        assert cur_part is not None
+        pg = ctx_get(store, ws, nrec.address, Selector(part=cur_part))
+        nb_pages.append(pg)
+        nexts = [
+            ln.split("--part ", 1)[1].strip()
+            for ln in pg.splitlines()
+            if ln.strip().startswith(("next:", "ctx get ")) and "--part " in ln
+        ]
+        cur_part = nexts[0] if nexts else None
+        if cur_part is None:
+            break
+    assert len(nb_pages) >= 3  # paginates within cell 1, then resumes to cell 2
+    assert any("x_349" in p for p in nb_pages) and any("# Cell Two" in p for p in nb_pages)
 
-    # 4. [P2] PPTX slide continuations reflect actually emitted content (even when b == deck_len).
+    # 4. [P2] PPTX slide continuations paginate within dense slide 1 AND resume to slide 2.
     pbuf = io.BytesIO()
     with zipfile.ZipFile(pbuf, "w", zipfile.ZIP_DEFLATED) as zf:
         zf.writestr(
@@ -516,11 +528,23 @@ def test_pr68_review_fixes_multiline_pem_pagination_and_sparse_xlsx(tmp_path, mo
             "</p:spTree></p:cSld></p:sld>",
         )
     prec = intake.intake_bytes(store, ws, pbuf.getvalue(), label="file", name="dense.pptx")
-    s12 = ctx_get(store, ws, prec.address, Selector(part="slides:1:2"))
-    assert "slides:1:2 of 2" not in s12  # must not falsely claim both slides were emitted
-    sl_next = _next_part(s12, "slide:1:")
-    s1_more = ctx_get(store, ws, prec.address, Selector(part=sl_next))
-    assert "Detailed bullet" in s1_more
+    sl_pages: list[str] = []
+    cur_part = "slides:1:2"
+    for _ in range(10):
+        assert cur_part is not None
+        pg = ctx_get(store, ws, prec.address, Selector(part=cur_part))
+        sl_pages.append(pg)
+        nexts = [
+            ln.split("--part ", 1)[1].strip()
+            for ln in pg.splitlines()
+            if ln.strip().startswith(("next:", "ctx get ")) and "--part " in ln
+        ]
+        cur_part = nexts[0] if nexts else None
+        if cur_part is None:
+            break
+    assert "slides:1:2 of 2" not in sl_pages[0]
+    assert len(sl_pages) >= 3
+    assert any("Detailed bullet 39" in p for p in sl_pages) and any("Slide 2 Summary" in p for p in sl_pages)
 
     # 5. [P2] Sparse XLSX preserves XML row coordinates (A1 + A10 -> R1, R10; sheet:#1:10:10 works).
     xbuf = io.BytesIO()

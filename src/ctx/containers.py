@@ -1357,24 +1357,64 @@ def _slice_lines(
     return label, "\n".join(chosen), cont
 
 
+def _parse_slides_spec(part: str) -> tuple[int, int, tuple[int, int] | None, bool]:
+    """Parse ``slide:<N>[:LA:LB]`` or ``slides:<A>:<B>[:LA:LB]``.
+
+    Returns ``(a, b, line_range, is_single_slide)``. When ``slides:A:B:LA:LB``
+    is given, ``line_range`` paginates within slide ``A`` and resumes the outer
+    range at ``slides:<A+1>:<next_b>`` once slide ``A`` completes.
+    """
+    if part.startswith("slide:"):
+        sm = re.fullmatch(r"slide:(\d+)(?::(\d+):(\d+))?", part)
+        if not sm:
+            raise ContainerError(
+                f"invalid slide selector {part!r}; use slide:<N>[:A:B] or slides:<A>:<B>[:LA:LB]"
+            )
+        idx = int(sm.group(1))
+        lr = (int(sm.group(2)), int(sm.group(3))) if sm.group(2) else (1, -1)
+        return idx, idx, lr, True
+    if part.startswith("slides:"):
+        sm = re.fullmatch(r"slides:(\d+):(\d+)(?::(\d+):(\d+))?", part)
+        if not sm:
+            raise ContainerError(
+                f"invalid slides selector {part!r}; use slides:<A>:<B> or slides:<A>:<B>:<LA>:<LB>"
+            )
+        a, b = int(sm.group(1)), int(sm.group(2))
+        lr = (int(sm.group(3)), int(sm.group(4))) if sm.group(3) else None
+        return a, b, lr, False
+    raise ContainerError(
+        f"unknown presentation --part {part!r}; use slide:<N>[:A:B] or slides:<A>:<B>[:LA:LB]"
+    )
+
+
 def _slice_slide_blocks(
     slide_blocks: list[tuple[int, list[str]]],
     total_slides: int,
     a: int,
     b: int,
-    single_line_range: tuple[int, int] | None,
+    line_range: tuple[int, int] | None,
+    is_single_slide: bool,
     max_lines: int,
     max_bytes: int,
 ) -> tuple[str, str, str | None]:
     """Budget-fit slide extraction with exact slide-level AND within-slide
-    line pagination so no slide content is ever silently dropped."""
-    if single_line_range is not None:
-        # Caller targeted a single slide: `slide:N` or `slide:N:A:B`.
+    line pagination, resuming the outer ``slides:`` chain once an oversized
+    slide finishes."""
+    if line_range is not None:
         sl_idx, sl_lines = slide_blocks[0]
-        la, lb = single_line_range
+        la, lb = line_range
         if lb < 0:
             lb = len(sl_lines)
-        return _slice_lines(sl_lines, la, lb, f"slide:{sl_idx}", max_lines, max_bytes)
+        prefix = f"slide:{sl_idx}" if is_single_slide else f"slides:{a}:{b}"
+        sub_lbl, sub_body, sub_cont = _slice_lines(
+            sl_lines, la, lb, prefix, max_lines, max_bytes
+        )
+        if sub_cont is None and not is_single_slide and sl_idx < total_slides:
+            span = b - a + 1
+            nxt_a = sl_idx + 1
+            nxt_b = min(total_slides, max(b, sl_idx + (span if span > 0 else 5)))
+            sub_cont = f"slides:{nxt_a}:{nxt_b}"
+        return sub_lbl, sub_body, sub_cont
 
     cap_lines = bounds.count(max_lines)
     emitted_blocks: list[str] = []
@@ -1389,9 +1429,14 @@ def _slice_slide_blocks(
         exceeds = cost_bytes > max_bytes or (cap_lines > 0 and cost_lines > cap_lines)
         if not emitted_blocks and exceeds:
             sub_lbl, sub_body, sub_cont = _slice_lines(
-                sl_lines, 1, len(sl_lines), f"slide:{sl_idx}", max_lines, max_bytes
+                sl_lines, 1, len(sl_lines), f"slides:{a}:{b}", max_lines, max_bytes
             )
-            return f"{sub_lbl} (from slides:{a}:{b})", sub_body, sub_cont
+            if sub_cont is None and sl_idx < total_slides:
+                span = b - a + 1
+                nxt_a = sl_idx + 1
+                nxt_b = min(total_slides, max(b, sl_idx + (span if span > 0 else 5)))
+                sub_cont = f"slides:{nxt_a}:{nxt_b}"
+            return f"slide:{sl_idx} ({sub_lbl})", sub_body, sub_cont
         if emitted_blocks and (
             used_bytes + cost_bytes > max_bytes
             or (cap_lines > 0 and used_lines + cost_lines > cap_lines)
@@ -1628,28 +1673,14 @@ def _extract_pptx_part(
 ) -> tuple[str, str, str | None]:
     budget = [MAX_TOTAL_DECOMPRESS]
     targets = _pptx_slide_targets(zf, budget)
-    single_line_range: tuple[int, int] | None = None
-    if part.startswith("slide:"):
-        sm = re.fullmatch(r"slide:(\d+)(?::(\d+):(\d+))?", part)
-        if not sm:
-            raise ContainerError(f"invalid slide selector {part!r}; use slide:<N>[:A:B] or slides:<A>:<B>")
-        a = b = int(sm.group(1))
-        if sm.group(2) and sm.group(3):
-            single_line_range = (int(sm.group(2)), int(sm.group(3)))
-        else:
-            single_line_range = (1, -1)
-    elif part.startswith("slides:"):
-        base, a, b = _parse_range_suffix(part, 5)
-        if base != "slides":
-            raise ContainerError(f"invalid slides selector {part!r}; use slides:<A>:<B>")
-    else:
-        raise ContainerError(f"unknown presentation --part {part!r}; use slide:<N>[:A:B] or slides:<A>:<B>")
+    a, b, line_range, is_single = _parse_slides_spec(part)
     win = bounds.span(a, b, len(targets))
     if win is None:
         raise ContainerError(f"slide range {a}:{b} out of range (deck has {len(targets)} slides)")
     a, b = win
     slide_blocks: list[tuple[int, list[str]]] = []
-    for idx in range(a, b + 1):
+    scan_end = a if line_range is not None else b
+    for idx in range(a, scan_end + 1):
         det = _pptx_slide_detail(zf, targets[idx - 1], budget)
         raw_sl: list[str] = [f"=== Slide #{idx}: {det['title'] or '(untitled)'} ==="]
         for bul in det["bullets"]:
@@ -1660,7 +1691,7 @@ def _extract_pptx_part(
             raw_sl.append(f"  [notes] {det['notes']}")
         slide_blocks.append((idx, _redact_lines(raw_sl, policy)))
     return _slice_slide_blocks(
-        slide_blocks, len(targets), a, b, single_line_range, max_lines, max_bytes
+        slide_blocks, len(targets), a, b, line_range, is_single, max_lines, max_bytes
     )
 
 
@@ -1907,30 +1938,21 @@ def extract_part(
                     return _slice_lines(rows_out, a, b, f"sheet:#{chosen_idx}", max_lines, max_bytes)
                 if fmt == "odp" and (spec.startswith("slide:") or spec.startswith("slides:")):
                     pages = [e for e in root.iter() if _local(e.tag) == "page"]
-                    single_line_range: tuple[int, int] | None = None
-                    if spec.startswith("slide:"):
-                        sm = re.fullmatch(r"slide:(\d+)(?::(\d+):(\d+))?", spec)
-                        if not sm:
-                            raise ContainerError(f"invalid slide selector {spec!r}")
-                        a = b = int(sm.group(1))
-                        single_line_range = (int(sm.group(2)), int(sm.group(3))) if sm.group(2) else (1, -1)
-                    else:
-                        base, a, b = _parse_range_suffix(spec, 5)
-                        if base != "slides":
-                            raise ContainerError(f"invalid slides selector {spec!r}")
+                    a, b, line_range, is_single = _parse_slides_spec(spec)
                     win = bounds.span(a, b, len(pages))
                     if win is None:
                         raise ContainerError(f"slide range {a}:{b} out of range (1..{len(pages)})")
                     a, b = win
                     odp_blocks: list[tuple[int, list[str]]] = []
-                    for idx in range(a, b + 1):
+                    scan_end = a if line_range is not None else b
+                    for idx in range(a, scan_end + 1):
                         txts = ["".join(p.itertext()).strip() for p in pages[idx - 1].iter() if _local(p.tag) == "p" and "".join(p.itertext()).strip()]
                         raw_sl = [f"=== Slide #{idx}: {txts[0] if txts else '(untitled)'} ==="]
                         for bul in txts[1:]:
                             raw_sl.append(f"  - {bul}")
                         odp_blocks.append((idx, _redact_lines(raw_sl, policy)))
                     return _slice_slide_blocks(
-                        odp_blocks, len(pages), a, b, single_line_range, max_lines, max_bytes
+                        odp_blocks, len(pages), a, b, line_range, is_single, max_lines, max_bytes
                     )
                 # ODT section:N or paragraphs:A:B
                 paras: list[tuple[int | None, str]] = []

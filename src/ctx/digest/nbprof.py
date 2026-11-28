@@ -387,18 +387,33 @@ def extract_notebook_part(
         return _slice_lines(cell_lines, la, lb, f"cell:{idx}", max_lines, max_bytes)
 
     if spec.startswith("cells:"):
-        rest = spec[len("cells:"):]
-        m = re.fullmatch(r"(\d+):(\d+)", rest)
+        m = re.fullmatch(r"cells:(\d+):(\d+)(?::(\d+):(\d+))?", spec)
         if not m:
-            raise ContainerError(f"invalid notebook selector {spec!r}; use cells:<A>:<B>")
+            raise ContainerError(
+                f"invalid notebook selector {spec!r}; use cells:<A>:<B> or cells:<A>:<B>:<LA>:<LB>"
+            )
         a, b = int(m.group(1)), int(m.group(2))
+        outer_line_range = (int(m.group(3)), int(m.group(4))) if m.group(3) else None
     else:
-        raise ContainerError(f"unknown notebook --part {spec!r}; use cell:<N>[:A:B] or cells:<A>:<B>")
+        raise ContainerError(f"unknown notebook --part {spec!r}; use cell:<N>[:A:B] or cells:<A>:<B>[:LA:LB]")
 
     win = bounds.span(a, b, total)
     if win is None:
         raise ContainerError(f"cell range {a}:{b} out of range (notebook has {total} cells)")
     a, b = win
+
+    if outer_line_range is not None:
+        la, lb = outer_line_range
+        block = _render_cell_lines(raw_cells[a - 1], a, policy)
+        sub_lbl, sub_body, sub_cont = _slice_lines(
+            block, la, lb, f"cells:{a}:{b}", max_lines, max_bytes
+        )
+        if sub_cont is None and a < total:
+            span = b - a + 1
+            nxt_a = a + 1
+            nxt_b = min(total, max(b, a + (span if span > 0 else 5)))
+            sub_cont = f"cells:{nxt_a}:{nxt_b}"
+        return f"cell:{a} ({sub_lbl})", sub_body, sub_cont
 
     cap_lines = bounds.count(max_lines)
     rendered: list[str] = []
@@ -413,9 +428,14 @@ def extract_notebook_part(
         exceeds = cost_bytes > max_bytes or (cap_lines > 0 and cost_lines > cap_lines)
         if not rendered and exceeds:
             sub_lbl, sub_body, sub_cont = _slice_lines(
-                block, 1, len(block), f"cell:{idx}", max_lines, max_bytes
+                block, 1, len(block), f"cells:{a}:{b}", max_lines, max_bytes
             )
-            return f"{sub_lbl} (from cells:{a}:{b})", sub_body, sub_cont
+            if sub_cont is None and idx < total:
+                span = b - a + 1
+                nxt_a = idx + 1
+                nxt_b = min(total, max(b, idx + (span if span > 0 else 5)))
+                sub_cont = f"cells:{nxt_a}:{nxt_b}"
+            return f"cell:{idx} ({sub_lbl})", sub_body, sub_cont
         if rendered and (
             used_bytes + cost_bytes > max_bytes
             or (cap_lines > 0 and used_lines + cost_lines > cap_lines)
