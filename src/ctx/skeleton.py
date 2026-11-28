@@ -1214,6 +1214,12 @@ def _scan_code_line(
     return "".join(out), (mode, depth)
 
 
+_NEXT_DECL_RE = re.compile(
+    r"^(?:export|public|private|protected|internal|open|abstract|final|static|async|pub|unsafe|extern)?[ \t]*"
+    r"(?:func|function|type|struct|interface|class|enum|trait|impl|mod|fn|def|fun|const|var|let|package|import)\b"
+)
+
+
 def _find_brace_end(
     lines: list[str],
     start0: int,
@@ -1237,6 +1243,12 @@ def _find_brace_end(
     seen_after = after_token is None
     for j in range(start0, limit):
         clean, state = _scan_code_line(lines[j], state, language, _REGEX_LINE_CAP)
+        if not opened and j > start0 and paren_depth == 0 and bracket_depth == 0:
+            # Never borrow the opening brace of a subsequent declaration when
+            # the declaration at start0 had no brace-delimited body (e.g.
+            # `type ID string`, `export type ID = string`, `fun f() = 1`).
+            if _NEXT_DECL_RE.match(clean.lstrip(" \t")):
+                return start0 + 1
         scan = clean
         if not seen_after and after_token is not None:
             pos = clean.find(after_token)
@@ -1522,7 +1534,11 @@ def _regex_extract(source: str, language: str) -> tuple[list[dict[str, Any]], li
             m = _match(_GO_TYPE_RE, ln)
             if m:
                 tkind = m.group(2) if m.group(2) in ("struct", "interface") else "type"
-                add(m.group(1), tkind, i, _find_brace_end(lines, i, language), None)
+                if tkind in ("struct", "interface") or "{" in _scan_code_line(ln, ("", 0), language)[0]:
+                    end_ln = _find_brace_end(lines, i, language)
+                else:
+                    end_ln = i + 1
+                add(m.group(1), tkind, i, end_ln, None)
                 continue
             m = _match(_GO_METHOD_RE, ln)
             if m:
@@ -1554,7 +1570,10 @@ def _regex_extract(source: str, language: str) -> tuple[list[dict[str, Any]], li
                 continue
             m = _match(_JS_IFACE_RE, ln)
             if m:
-                end_ln = _find_brace_end(lines, i, language)
+                if m.group(1) == "type" and "{" not in _scan_code_line(ln, ("", 0), language)[0]:
+                    end_ln = i + 1
+                else:
+                    end_ln = _find_brace_end(lines, i, language)
                 add(m.group(2), m.group(1), i, end_ln, cur_scope)
                 continue
             m = _match(_JS_FUNC_RE, ln)

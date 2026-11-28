@@ -439,6 +439,31 @@ def test_regex_skeleton_multiline_raw_string_and_block_comment_braces(monkeypatc
     assert tmap["multi"]["range"] == [11, 13]
     assert tmap["blockArrow"]["range"] == [14, 16]
 
+    # Bodyless Go type alias and TS type alias followed by functions must not
+    # borrow the following function's braces.
+    go_alias = "\n".join([
+        "package x",
+        "type ID string",
+        "func Run() {",
+        "\tprintln(1)",
+        "}",
+    ])
+    gasyms, _, _ = skeleton._extract(go_alias, "go", "alias.go")
+    gamap = {s["name"]: s for s in gasyms}
+    assert gamap["ID"]["range"] == [2, 2]
+    assert gamap["Run"]["range"] == [3, 5]
+
+    ts_alias = "\n".join([
+        "export type ID = string",
+        "export function run() {",
+        "  return 1;",
+        "}",
+    ])
+    tasyms, _, _ = skeleton._extract(ts_alias, "typescript", "alias.ts")
+    tamap = {s["name"]: s for s in tasyms}
+    assert tamap["ID"]["range"] == [1, 1]
+    assert tamap["run"]["range"] == [2, 4]
+
 
 def test_posttooluse_numbered_json_jsonl_and_notebook_structured_retrieval(
     state_home, workspace_dir
