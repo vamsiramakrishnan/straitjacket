@@ -225,7 +225,10 @@ def test_pre_invocation_system_message_and_rewrite_bin(tmp_path, monkeypatch):
     assert pre_legacy["decision"] == "deny"
     assert f"Re-run it as: {custom_bin} run" in pre_legacy["reason"]
 
-    # Running custom_bin directly is recognized as a self ctx invocation.
+    # Running custom_bin directly is recognized as a self ctx invocation, even
+    # in embedded Python runtimes where sys.executable is None or empty.
+    assert hook._is_ctx_invocation(f"{custom_bin} get run:abc123#stdout", str(ws))
+    monkeypatch.setattr(sys, "executable", None)
     assert hook._is_ctx_invocation(f"{custom_bin} get run:abc123#stdout", str(ws))
 
     # PreInvocation emits hidden systemMessage when opted in.

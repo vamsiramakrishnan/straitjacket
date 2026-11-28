@@ -7,19 +7,38 @@ import re
 import time
 
 import pytest
-from conftest import make_store, make_ws
-from shape_helpers import KEY20, SECRET, assert_in_budget, csv_text
 
 from ctx.digest import digest_output
 from ctx.digest.mdprof import looks_like_markdown, outline_file, parse_markdown
 from ctx.intake import intake_bytes
 from ctx.retrieval import Selector, get
+from ctx.store import Store
+from ctx.workspace import resolve_workspace
+
+_TEST_KEY20 = "AKIA" + "IOSFODNN7EXAMPLE"
+_TEST_SECRET = "ghp_" + "A" * 36
 
 
 @pytest.fixture()
-def env(state_home, workspace_dir):
-    ws = make_ws(workspace_dir)
-    return ws, make_store(ws)
+def env(tmp_path, monkeypatch):
+    state = tmp_path / "state"
+    ws_dir = tmp_path / "ws"
+    ws_dir.mkdir()
+    monkeypatch.setenv("CTX_STATE_HOME", str(state))
+    ws = resolve_workspace(ws_dir)
+    return ws, Store(ws.workspace_id)
+
+
+def _sample_csv(rows: int = 300) -> str:
+    lines = ["id,name,region,amount,when,active"]
+    regions = ("north", "south", "east", "west")
+    names = ("alice", "bob", "carol", "dave")
+    for i in range(1, rows + 1):
+        lines.append(
+            f"{i},{names[i % 4]},{regions[i % 4]},{i * 1.25:.2f},"
+            f"2025-01-{1 + (i % 28):02d},{'true' if i % 2 == 0 else 'false'}"
+        )
+    return "\n".join(lines) + "\n"
 
 
 def _rich_markdown(sections: int = 12, include_frontmatter: bool = True) -> str:
@@ -64,7 +83,7 @@ def _rich_markdown(sections: int = 12, include_frontmatter: bool = True) -> str:
 def test_markdown_profile_digests_tool_output_with_heading_outline(env):
     ws, store = env
     text = _rich_markdown(14)
-    digest, short = digest_output(store, ws, "read_file", text)
+    digest, _short = digest_output(store, ws, "read_file", text)
 
     assert digest.splitlines()[0].endswith("profile=markdown/v1]")
     assert "frontmatter:" in digest
@@ -137,16 +156,16 @@ def test_markdown_profile_redacts_secrets_in_headings_and_frontmatter(env):
     ws, store = env
     text = (
         "---\n"
-        f"title: Spec for {KEY20}\n"
+        f"title: Spec for {_TEST_KEY20}\n"
         "---\n\n"
-        f"# Architecture {SECRET}\n\n"
+        f"# Architecture {_TEST_SECRET}\n\n"
         "## Details\n\n"
         + ("- Bullet item with `code` and **text**.\n" * 200)
     )
     digest, _ = digest_output(store, ws, "read_file", text)
     assert digest.splitlines()[0].endswith("profile=markdown/v1]")
-    assert KEY20 not in digest
-    assert SECRET not in digest
+    assert _TEST_KEY20 not in digest
+    assert _TEST_SECRET not in digest
     assert "redaction: applied" in digest
 
 
@@ -156,12 +175,12 @@ def test_markdown_profile_works_for_intake_and_fits_budget(env):
     rec = intake_bytes(store, ws, text.encode("utf-8"), label="prd")
     assert rec.profile == "markdown/v1"
     assert "more headings omitted" in rec.digest
-    assert_in_budget(ws, rec)
+    assert len(rec.digest.encode("utf-8")) <= ws.config.budgets.digest_tokens * 4
 
 
 def test_markdown_profile_linear_time_on_pathological_input(env):
     ws, store = env
-    huge = ("# " + "a" * 200_000 + "\n## " + "b" * 200_000 + "\n- x\n")
+    huge = "# " + "a" * 200_000 + "\n## " + "b" * 200_000 + "\n- x\n"
     t0 = time.perf_counter()
     digest, _ = digest_output(store, ws, "read_file", huge)
     assert time.perf_counter() - t0 < 5.0
@@ -176,13 +195,13 @@ def test_outline_file_returns_bounded_outline(tmp_path):
     out = outline_file(str(md), Redaction())
     assert out is not None
     assert "frontmatter:" in out
-    assert "L" in out and "# \"Platform Architecture\"" in out
+    assert "L" in out and '# "Platform Architecture"' in out
 
 
 def test_delimited_profile_digests_csv_tool_output(env):
     ws, store = env
-    text = csv_text(300)
-    digest, short = digest_output(store, ws, "read_file", text)
+    text = _sample_csv(300)
+    digest, _short = digest_output(store, ws, "read_file", text)
     assert digest.splitlines()[0].endswith("profile=delimited/v1]")
     assert "delimited: comma · 6 columns" in digest
     assert "300 data rows (exact)" in digest

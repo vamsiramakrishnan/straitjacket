@@ -1562,12 +1562,22 @@ def _self_ctx_paths() -> set[str]:
     """Real paths of the ctx executable this hook is running as."""
     out: set[str] = set()
     try:
-        if os.path.basename(sys.argv[0]) in ("ctx", "ctx.exe"):
+        if sys.argv and sys.argv[0] and os.path.basename(sys.argv[0]) in ("ctx", "ctx.exe"):
             out.add(os.path.realpath(sys.argv[0]))
-        out.add(os.path.realpath(os.path.join(os.path.dirname(sys.executable), "ctx")))
+    except Exception:
+        pass
+    try:
+        if sys.executable:
+            out.add(os.path.realpath(os.path.join(os.path.dirname(sys.executable), "ctx")))
+    except Exception:
+        pass
+    try:
         found = _which("ctx")
         if found:
             out.add(os.path.realpath(found))
+    except Exception:
+        pass
+    try:
         extra = os.environ.get("CTX_EXTRA_SELF_PATHS", "")
         if extra:
             for item in extra.split(os.pathsep):
