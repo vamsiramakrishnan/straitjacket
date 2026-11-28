@@ -524,17 +524,44 @@ def _get(
                 max_bytes=part_budget,
             )
         except ContainerError as e:
-            raise RetrievalError(str(e)) from None
+            recovered_part = None
+            if b"\x00" not in data[:4096]:
+                from ctx.digest import strip_line_number_wrapper
+
+                cleaned = strip_line_number_wrapper(data.decode("utf-8", "replace"))
+                if cleaned is not None:
+                    try:
+                        recovered_part = extract_part(
+                            cleaned.encode("utf-8"),
+                            selector.part,
+                            policy=ws.config.redaction,
+                            max_lines=budget.max_inline_lines,
+                            max_bytes=part_budget,
+                        )
+                    except ContainerError:
+                        recovered_part = None
+            if recovered_part is None:
+                raise RetrievalError(str(e)) from None
+            part_label, body, next_part = recovered_part
         header.append(f"selector: --part {part_label}")
         if next_part:
             continuation = f"ctx get {ref_text} --part {_shell_part_arg(next_part)}"
     elif selector.json_pointer is not None:
-        try:
-            from ctx.textutil import loads_fast
+        from ctx.textutil import loads_fast
 
-            doc = loads_fast(data.decode("utf-8", "replace"))
+        raw_text = data.decode("utf-8", "replace")
+        try:
+            doc = loads_fast(raw_text)
         except json.JSONDecodeError as e:
-            raise RetrievalError(f"content is not JSON: {e}") from e
+            from ctx.digest import strip_line_number_wrapper
+
+            cleaned = strip_line_number_wrapper(raw_text)
+            if cleaned is None:
+                raise RetrievalError(f"content is not JSON: {e}") from e
+            try:
+                doc = loads_fast(cleaned)
+            except json.JSONDecodeError:
+                raise RetrievalError(f"content is not JSON: {e}") from e
         # RFC 6901 via the one implementation (ctx.textutil.json_pointer).
         # This used to short-circuit `pointer in ("", "/")` to the whole
         # document — but "/" is the member with the EMPTY-STRING key, not
@@ -549,8 +576,27 @@ def _get(
         header.append(f"selector: --json-pointer {pointer or '/'}")
         body = json.dumps(node, indent=2, sort_keys=True, ensure_ascii=False)
     elif selector.records is not None:
+        from ctx.digest import strip_line_number_wrapper
+
         a, b = selector.records
-        lines = [ln for ln in data.decode("utf-8", "replace").splitlines() if ln.strip()]
+        raw_text = data.decode("utf-8", "replace")
+        rec_text = raw_text
+        cleaned = strip_line_number_wrapper(raw_text)
+        if cleaned is not None:
+            # Normalize numbered JSONL/record streams (captured via host read
+            # tools) so `--records` addresses actual records rather than banner
+            # lines or `N: ` prefixes.
+            sample = [ln.strip() for ln in cleaned.splitlines() if ln.strip()][:5]
+            if sample and all(ln[:1] in "{[" for ln in sample):
+                from ctx.textutil import loads_fast
+
+                try:
+                    for ln in sample:
+                        loads_fast(ln)
+                    rec_text = cleaned
+                except json.JSONDecodeError:
+                    pass
+        lines = [ln for ln in rec_text.splitlines() if ln.strip()]
         # Third door onto the contract _window now owns: a start past the
         # record count returned an empty body under a header claiming the
         # range, and exited 0.

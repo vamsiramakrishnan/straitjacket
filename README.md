@@ -18,7 +18,7 @@ Your harness still runs the model, authenticates the user, and controls its tool
   <a href="https://github.com/deepseek-ai/deepseek-harness"><img src="assets/agents/dsh.svg" width="36" height="36" alt="DeepSeek Harness" title="DeepSeek Harness"></a>
 </p>
 
-Python 3.11+ · `ctx-harness` v0.5.0 · Apache-2.0 · [Documentation](https://vamsiramakrishnan.github.io/straitjacket/)
+Python 3.11+ · `ctx-harness` v0.6.0 · Apache-2.0 · [Documentation](https://vamsiramakrishnan.github.io/straitjacket/)
 
 **See the mechanism:** the [20,001-line log replay](evals/cache-ab-2026-11-23.md)
 reduces 302,628 tokens to a 531-token canonical digest, retains a quiet anomaly,
@@ -30,7 +30,7 @@ delivery. [Task success and cost need separate measurements](#what-the-measureme
 In a repository with a pytest suite, run:
 
 ```sh
-python -m pip install 'ctx-harness==0.5.0'
+python -m pip install 'ctx-harness==0.6.0'
 ctx run -- pytest -q
 ```
 

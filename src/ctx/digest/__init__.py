@@ -119,6 +119,79 @@ def detect_profile(ctx: DigestContext) -> tuple[Profile, str]:
     return _PROFILES[-1], "fallback"  # pragma: no cover - text always matches
 
 
+_READ_BANNER_RE = re.compile(r"^Showing lines \d+-\d+ of \d+[ \t]*$")
+_READ_FOOTER_RE = re.compile(r"^\.\.\.\s*\[truncated\b.*\]$")
+_LINE_NUM_PREFIX_RE = re.compile(r"^[ \t]*(\d+)(: |→|\t)(.*)$")
+_UNNUMBER_ADOPT_PROFILES = frozenset({
+    "markdown/v1",
+    "delimited/v1",
+    "json/v1",
+    "jsonlines/v1",
+    "notebook/v1",
+    "markup/v1",
+    "config/v1",
+    "comm/v1",
+    "table/v1",
+})
+
+
+def strip_line_number_wrapper(text: str) -> str | None:
+    """Strip uniform sequential line-number prefixes emitted by host file-read
+    tools (``1: ...``, ``     1→...``, ``1\\t...``, plus an optional leading
+    ``Showing lines A-B of N`` banner) while preserving the exact 1-to-1 line
+    count of the stored stream so every line coordinate and minted span stays
+    valid against ``ctx get run:<id>#stdout --lines A:B``.
+
+    Returns None when the text is not uniformly line-numbered.
+    """
+    if not text:
+        return None
+    raw_lines = text.split("\n")
+    has_trailing_nl = bool(raw_lines and raw_lines[-1] == "")
+    if has_trailing_nl:
+        raw_lines.pop()
+    if len(raw_lines) < 10:
+        return None
+
+    out: list[str] = []
+    start_idx = 0
+    if _READ_BANNER_RE.match(raw_lines[0]):
+        out.append("")  # preserve exact 1-based blob line indices
+        start_idx = 1
+
+    delim: str | None = None
+    prev_num: int | None = None
+    matched = 0
+    non_empty = 0
+
+    for idx in range(start_idx, len(raw_lines)):
+        ln = raw_lines[idx]
+        if not ln.strip():
+            out.append("")
+            continue
+        if idx == len(raw_lines) - 1 and _READ_FOOTER_RE.match(ln.strip()):
+            out.append("")
+            continue
+        non_empty += 1
+        m = _LINE_NUM_PREFIX_RE.match(ln)
+        if m:
+            num = int(m.group(1))
+            d = m.group(2)
+            if delim is None:
+                delim = d
+            if d == delim and (prev_num is None or num == prev_num + 1):
+                prev_num = num
+                matched += 1
+                out.append(m.group(3))
+                continue
+        out.append(ln)
+
+    if non_empty < 10 or matched * 100 < non_empty * 85:
+        return None
+    joined = "\n".join(out)
+    return joined + "\n" if has_trailing_nl else joined
+
+
 @functools.lru_cache(maxsize=1)
 def extractor_epoch() -> str:
     """Identity of the FACT-tier extraction the registry can currently do.
@@ -309,6 +382,41 @@ def render_run_digest(
     run = _picker_run(ws, ctx, focus) if picker else None
     ctx.picker = run
     profile, reason = detect_profile(ctx)
+
+    # Host file-read tools often prepend sequential line numbers (`1: `, `1→`)
+    # and a `Showing lines A-B of N` banner. When detection fell through to
+    # `text/v1`, re-sniff with uniform line prefixes stripped while keeping the
+    # exact 1-to-1 line count so every minted span addresses the stored blob.
+    if profile.version == "text/v1" and not from_intake(ctx) and ctx.stdout.text:
+        cleaned = strip_line_number_wrapper(ctx.stdout.text)
+        if cleaned is not None:
+            from ctx.digest.base import StreamView
+
+            clean_view = StreamView(
+                name=ctx.stdout.name,
+                bytes=ctx.stdout.bytes,
+                lines=ctx.stdout.lines,
+                media_type=ctx.stdout.media_type,
+                text=cleaned,
+                parsed_fully=ctx.stdout.parsed_fully,
+                head=cleaned[:64].encode("utf-8", "replace"),
+            )
+            alt_ctx = DigestContext(
+                ws=ctx.ws,
+                manifest=ctx.manifest,
+                stdout=clean_view,
+                stderr=ctx.stderr,
+                focus_terms=ctx.focus_terms,
+                store=ctx.store,
+                suggestion_cap=ctx.suggestion_cap,
+                dense=ctx.dense,
+                plan=ctx.plan,
+                picker=ctx.picker,
+            )
+            alt_profile, alt_reason = detect_profile(alt_ctx)
+            if alt_profile.version in _UNNUMBER_ADOPT_PROFILES:
+                ctx = alt_ctx
+                profile, reason = alt_profile, alt_reason
 
     # Resolve automatic hints only for the generic selector. Structured profiles
     # retain their existing behavior; explicit focus (including "") always wins.

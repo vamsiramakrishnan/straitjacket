@@ -3993,38 +3993,57 @@ def _whole_file_read(tool_input: dict[str, Any] | None) -> bool:
 
 
 def _skeleton_outline_for(path_str: str, workspace_root: str | None, size: int,
-                          range_hint: str = "Read with offset and limit") -> str | None:
+                          range_hint: str = "Read with offset and limit",
+                          policy: dict[str, Any] | None = None) -> str | None:
     """The map of a large code file, for a Read that wanted all of it.
 
     Measured on DeepSWE (cattrs, haiku): every whole-file Read of the 64 KB
     converters.py came back as its first 240 lines, ~2.5k tokens showing 14%
     of the file and no structure, and the session paged on from there. The
-    skeleton (tree-sitter / ctags / stdlib ast, with line ranges and minted
-    spans) is ~1k tokens for all 83 symbols and makes the next read a
+    skeleton (tree-sitter / ctags / stdlib ast / stdlib regex, with line ranges
+    and minted spans) is ~1k tokens for all symbols and makes the next read a
     targeted one. Slice reads (offset/limit) are never touched. Fail-open:
     any problem returns None and the bounded first page applies as before."""
-    if not workspace_root:
-        return None
     try:
-        from ctx.skeleton import language_for, skeleton_for, skeleton_outline
+        from ctx.skeleton import language_for, outline_code_file, skeleton_for, skeleton_outline
 
-        rel = os.path.relpath(path_str, workspace_root).replace(os.sep, "/")
-        if rel.startswith("..") or not language_for(rel):
+        if not language_for(path_str):
             return None
-        from ctx.store import Store
-        from ctx.workspace import resolve_workspace
+        rel: str | None = None
+        if workspace_root:
+            try:
+                cand = os.path.relpath(path_str, workspace_root).replace(os.sep, "/")
+                if not cand.startswith(".."):
+                    rel = cand
+            except ValueError:
+                rel = None
+        if rel is not None and workspace_root:
+            from ctx.store import Store
+            from ctx.workspace import resolve_workspace
 
-        ws = resolve_workspace(workspace_root)
-        store = Store(ws.workspace_id, retention_days=ws.config.store.retention_days)
-        sk = skeleton_for(store, ws, rel)
-        if not sk.get("symbols"):
+            ws = resolve_workspace(workspace_root)
+            store = Store(ws.workspace_id, retention_days=ws.config.store.retention_days)
+            sk = skeleton_for(store, ws, rel)
+            if not sk.get("symbols"):
+                return None
+            outline = skeleton_outline(sk, _OUTLINE_BUDGET_TOKENS)
+            return (
+                f"CTX_CONTEXT_GUARD: whole-file read of a {size:,}-byte code file "
+                f"(~{size // 4:,} tok). Its map is below instead of the first page; "
+                f"read what you need by range ({range_hint}) or by "
+                f"symbol (ctx get repo:{rel} --symbol <Name>).\n" + outline
+            )
+        outline = outline_code_file(
+            path_str,
+            _redaction_policy(policy or {}),
+            _OUTLINE_BUDGET_TOKENS,
+        )
+        if not outline:
             return None
-        outline = skeleton_outline(sk, _OUTLINE_BUDGET_TOKENS)
         return (
             f"CTX_CONTEXT_GUARD: whole-file read of a {size:,}-byte code file "
             f"(~{size // 4:,} tok). Its map is below instead of the first page; "
-            f"read what you need by range ({range_hint}) or by "
-            f"symbol (ctx get repo:{rel} --symbol <Name>).\n" + outline
+            f"read what you need by range ({range_hint}).\n" + outline
         )
     except Exception:
         return None
@@ -4043,6 +4062,7 @@ _CONFIG_SUFFIXES = (
 )
 _COMM_SUFFIXES = (".eml", ".mbox", ".ics", ".vcf", ".srt", ".vtt")
 _DELIM_SUFFIXES = (".csv", ".tsv")
+_PLAIN_TEXT_SUFFIXES = (".txt", ".text", ".out")
 
 
 def _document_outline_for(
@@ -4053,6 +4073,7 @@ def _document_outline_for(
     range_hint: str = "Read with offset and limit",
     *,
     binary_only: bool = False,
+    include_plain_text: bool = False,
 ) -> str | None:
     """Structural outline for whole-file reads of knowledge-work files
     (Office/ODF/EPUB, SQLite, archives, notebooks, HTML/XML/SVG, YAML/TOML/
@@ -4116,9 +4137,17 @@ def _document_outline_for(
 
             kind_label = "delimited table"
             outline = dm_outline(path_str, _redaction_policy(policy))
+        elif include_plain_text and low.endswith(_PLAIN_TEXT_SUFFIXES):
+            from ctx.digest.textoutline import outline_file as txt_outline
+
+            kind_label = "structured text"
+            outline = txt_outline(path_str, _redaction_policy(policy))
         if not outline:
             return None
-        repo_hint = f" or ctx get repo:{rel} --lines A:B" if rel else ""
+        repo_hint = (
+            f", ctx get repo:{rel} --lines A:B, or ctx search repo:{rel} '<pattern>' --context 3"
+            if rel else ""
+        )
         return (
             f"CTX_CONTEXT_GUARD: whole-file read of a {size:,}-byte {kind_label} file "
             f"(~{size // 4:,} tok). Its structural outline is below instead of the first "
@@ -4662,13 +4691,15 @@ def classify_read(
     if size > limit and _range_style(tool_input) and _steering_allows(policy):
         if not in_ledger and _whole_file_read(tool_input):
             outline = _skeleton_outline_for(path_str, workspace_root, size,
-                                            "view_file with StartLine and EndLine")
+                                            "view_file with StartLine and EndLine",
+                                            policy=policy)
             if not outline:
                 outline = _markdown_outline_for(path_str, workspace_root, size, policy,
                                                 "view_file with StartLine and EndLine")
             if not outline:
                 outline = _document_outline_for(path_str, workspace_root, size, policy,
-                                                "view_file with StartLine and EndLine")
+                                                "view_file with StartLine and EndLine",
+                                                include_plain_text=True)
             if outline:
                 return _deny(outline)
         # The requested start is kept (1 for a whole-file read): serving a
@@ -4681,8 +4712,7 @@ def classify_read(
             range_hint = ("view_file with StartLine and EndLine"
                           if _range_style(tool_input) else "Read with offset and limit")
             outline = _skeleton_outline_for(
-                path_str, workspace_root, size,
-                *(("view_file with StartLine and EndLine",) if _range_style(tool_input) else ()))
+                path_str, workspace_root, size, range_hint, policy=policy)
             if not outline:
                 outline = _markdown_outline_for(path_str, workspace_root, size, policy, range_hint)
             if not outline:

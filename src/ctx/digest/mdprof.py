@@ -93,11 +93,13 @@ def parse_markdown(text: str) -> MarkdownDoc:
     frontmatter: list[tuple[str, str]] = []
     fm_end = 0
     idx = 0
+    while idx < total and not lines[idx].strip():
+        idx += 1
 
-    if first.strip() == "---":
+    if idx < total and lines[idx].lstrip("\ufeff").strip() == "---":
         kv: list[tuple[str, str]] = []
-        limit = min(total, _FRONTMATTER_MAX_LINES)
-        for j in range(1, limit):
+        limit = min(total, idx + _FRONTMATTER_MAX_LINES)
+        for j in range(idx + 1, limit):
             s = lines[j][:LINE_EXAMINE_CAP].strip()
             if s in ("---", "..."):
                 if kv:

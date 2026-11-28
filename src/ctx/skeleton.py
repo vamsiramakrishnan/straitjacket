@@ -28,6 +28,7 @@ import ast
 import hashlib
 import json
 import os
+import re
 import shutil
 import subprocess
 import tempfile
@@ -36,7 +37,7 @@ from typing import Any
 
 from ctx.execution import snapshot_file
 from ctx.store import Store, canonical_json
-from ctx.textutil import estimate_tokens
+from ctx.textutil import estimate_tokens, mask_hits, redaction_scope, secret_hits
 from ctx.workspace import Workspace
 
 SKELETON_SCHEMA = "ctx.skeleton/v1"
@@ -100,6 +101,8 @@ def _backend_fingerprint(language: str | None) -> str:
         rungs.append("ctags")
     if language == "python":
         rungs.append("ast")
+    elif _regex_enabled(language):
+        rungs.append("regex")
     return "+".join(rungs) or "none"
 
 
@@ -323,6 +326,13 @@ def _extract(
             syms, imps = _ast_extract(source)
             return syms, imps, "ast"
         except SyntaxError:
+            pass
+    elif _regex_enabled(language):
+        try:
+            syms, imps = _regex_extract(source, language or "")
+            if syms or imps:
+                return syms, imps, "regex"
+        except Exception:
             pass
     return [], [], "none"
 
@@ -1053,3 +1063,808 @@ def _tree_sitter_extract(source: str, language: str) -> tuple[list[dict[str, Any
         walk_js(root, None)
 
     return symbols, sorted(dict.fromkeys(i for i in imports if i))
+
+
+# ------------------------------------------------------- stdlib regex fallback
+_REGEX_LANGUAGES = frozenset({
+    "go", "typescript", "javascript", "rust", "java", "kotlin",
+    "c", "c++", "c#", "swift", "scala", "ruby", "php", "lua", "shell",
+})
+_REGEX_LINE_CAP = 1024
+_CTRL_WORDS = frozenset({
+    "if", "else", "for", "while", "switch", "case", "catch", "try", "return",
+    "sizeof", "typeof", "delete", "new", "throw", "assert", "do", "goto",
+    "default", "break", "continue", "using", "namespace", "class", "struct",
+    "enum", "union", "typedef", "template", "public", "private", "protected",
+    "const", "static", "extern", "inline", "virtual", "override", "async",
+    "await", "export", "import", "from", "function", "var", "let",
+})
+
+
+def _regex_enabled(language: str | None) -> bool:
+    """True when the zero-dependency stdlib structural extractor supports
+    ``language`` and is not disabled by ``CTX_NO_REGEX_SKELETON``."""
+    if os.environ.get("CTX_NO_REGEX_SKELETON"):
+        return False
+    return language in _REGEX_LANGUAGES
+
+
+_NESTED_BLOCK_COMMENT_LANGS = frozenset({"rust", "kotlin", "swift", "scala"})
+_BACKTICK_MULTILINE_LANGS = frozenset({"go", "javascript", "typescript"})
+_TRIPLE_QUOTE_MULTILINE_LANGS = frozenset({"java", "kotlin", "swift", "scala", "c#"})
+
+
+_JS_REGEX_PRE_KEYWORDS = frozenset({
+    "return", "case", "throw", "in", "of", "typeof", "void", "delete",
+    "await", "yield", "new", "else", "do",
+})
+_JS_REGEX_PRE_CHARS = frozenset("(=,:;[!&|?{}~^+-*%<>")
+
+
+def _can_start_js_regex(line: str, slash_idx: int) -> bool:
+    """True when ``/`` at ``slash_idx`` is in expression position where JS/TS
+    grammar parses a regex literal rather than division."""
+    k = slash_idx - 1
+    while k >= 0 and line[k] in (" ", "\t"):
+        k -= 1
+    if k < 0:
+        return True
+    ch = line[k]
+    if ch in _JS_REGEX_PRE_CHARS:
+        return True
+    if ch.isalnum() or ch in ("_", "$"):
+        end_w = k + 1
+        while k > 0 and (line[k - 1].isalnum() or line[k - 1] in ("_", "$")):
+            k -= 1
+        return line[k:end_w] in _JS_REGEX_PRE_KEYWORDS
+    return False
+
+
+def _scan_code_line(
+    line: str,
+    state: tuple[str, int],
+    language: str,
+    max_chars: int = _REGEX_LINE_CAP,
+) -> tuple[str, tuple[str, int]]:
+    """Linear-time stateful scanner stripping line comments, multiline block
+    comments (``/* ... */``), single-line strings, and multiline raw/triple
+    strings so brace-depth counting and declaration matching are not fooled by
+    braces or fake signatures inside comments or string literals.
+
+    ``state`` is ``(mode, depth)`` where ``mode`` is ``""``, ``"/*"``, ``"`"``,
+    or ``'\"\"\"'``.
+    """
+    mode, depth = state
+    out: list[str] = []
+    i = 0
+    n = len(line) if len(line) <= max_chars else max_chars
+    quote = ""
+    nested_bc = language in _NESTED_BLOCK_COMMENT_LANGS
+    allow_bt = language in _BACKTICK_MULTILINE_LANGS
+    allow_tq = language in _TRIPLE_QUOTE_MULTILINE_LANGS
+    is_shell = language == "shell"
+
+    while i < n:
+        ch = line[i]
+        if mode == "/*":
+            if ch == "*" and i + 1 < n and line[i + 1] == "/":
+                depth -= 1
+                if depth <= 0:
+                    mode, depth = "", 0
+                i += 2
+                continue
+            if nested_bc and ch == "/" and i + 1 < n and line[i + 1] == "*":
+                depth += 1
+                i += 2
+                continue
+            i += 1
+            continue
+        if mode == "`":
+            if language != "go" and ch == "\\":
+                i += 2
+                continue
+            if ch == "`":
+                mode = ""
+            i += 1
+            continue
+        if mode == '"""':
+            if ch == "\\" and language in ("java", "scala"):
+                i += 2
+                continue
+            if line.startswith('"""', i):
+                mode = ""
+                i += 3
+                continue
+            i += 1
+            continue
+        if quote:
+            if ch == "\\":
+                i += 2
+                continue
+            if ch == quote:
+                quote = ""
+            i += 1
+            continue
+
+        if is_shell:
+            if ch == "#" and (i == 0 or line[i - 1] in (" ", "\t", ";", "(", ")")):
+                break
+            if ch in ('"', "'"):
+                quote = ch
+                i += 1
+                continue
+            out.append(ch)
+            i += 1
+            continue
+
+        if ch == "/" and i + 1 < n:
+            nxt = line[i + 1]
+            if nxt == "/":
+                break
+            if nxt == "*":
+                mode, depth = "/*", 1
+                i += 2
+                continue
+            if language in ("javascript", "typescript") and _can_start_js_regex(line, i):
+                # Consume single-line JS/TS regex literal (handling `\/` escapes
+                # and `[...]` character classes) so `/}/` never closes a block.
+                j_re = i + 1
+                in_cls = False
+                closed_re = False
+                while j_re < n:
+                    rc = line[j_re]
+                    if rc == "\\":
+                        j_re += 2
+                        continue
+                    if rc == "[" and not in_cls:
+                        in_cls = True
+                    elif rc == "]" and in_cls:
+                        in_cls = False
+                    elif rc == "/" and not in_cls:
+                        closed_re = True
+                        j_re += 1
+                        break
+                    j_re += 1
+                if closed_re:
+                    i = j_re
+                    continue
+        if allow_tq and line.startswith('"""', i):
+            mode, depth = '"""', 0
+            i += 3
+            continue
+        if allow_bt and ch == "`":
+            mode, depth = "`", 0
+            i += 1
+            continue
+        if ch == '"':
+            quote = '"'
+            i += 1
+            continue
+        if ch == "'":
+            if language == "rust":
+                # Distinguish Rust char literals ('x', '\n', '\u{7FFF}') from
+                # lifetime parameters ('a, 'static) so `'a` never swallows `{`.
+                if i + 2 < n and line[i + 2] == "'":
+                    i += 3
+                    continue
+                if i + 1 < n and line[i + 1] == "\\":
+                    end_q = line.find("'", i + 2, min(n, i + 12))
+                    if end_q >= 0:
+                        i = end_q + 1
+                        continue
+                out.append(ch)
+                i += 1
+                continue
+            quote = "'"
+            i += 1
+            continue
+        out.append(ch)
+        i += 1
+    return "".join(out), (mode, depth)
+
+
+_NEXT_DECL_RE = re.compile(
+    r"^(?:export|public|private|protected|internal|open|abstract|final|static|async|pub|unsafe|extern)?[ \t]*"
+    r"(?:func|function|type|struct|interface|class|enum|trait|impl|mod|fn|def|fun|const|var|let|package|import)\b"
+)
+
+
+def _find_brace_end(
+    lines: list[str],
+    start0: int,
+    language: str = "go",
+    max_scan: int = 2000,
+    after_token: str | None = None,
+) -> int:
+    """1-based end line of a `{ ... }` block opening on or near ``start0``,
+    preserving multiline comment and raw-string lexical state across lines.
+
+    Braces inside ``(...)`` or ``[...]`` parameter/type lists are ignored, and
+    termination is evaluated at end-of-line so inline object return types like
+    ``function make(): {value: number} {`` never terminate before the body.
+    """
+    depth = 0
+    paren_depth = 0
+    bracket_depth = 0
+    opened = False
+    sig_closed_at: int | None = None
+    state: tuple[str, int] = ("", 0)
+    limit = min(len(lines), start0 + max_scan)
+    seen_after = after_token is None
+    for j in range(start0, limit):
+        clean, state = _scan_code_line(lines[j], state, language, _REGEX_LINE_CAP)
+        if not opened and j > start0 and paren_depth == 0 and bracket_depth == 0:
+            # Never borrow the opening brace of a subsequent declaration when
+            # the declaration at start0 had no brace-delimited body (e.g.
+            # `type ID string`, `export type ID = string`, `fun f() = 1`).
+            if _NEXT_DECL_RE.match(clean.lstrip(" \t")):
+                return start0 + 1
+        scan = clean
+        if not seen_after and after_token is not None:
+            pos = clean.find(after_token)
+            if pos >= 0:
+                scan = clean[pos + len(after_token):]
+                seen_after = True
+            else:
+                scan = ""
+        last_non_ws = ""
+        line_only_type_brace = False
+        for ch in scan:
+            if not opened:
+                if ch == "(":
+                    paren_depth += 1
+                    last_non_ws = ch
+                    continue
+                if ch == ")" and paren_depth > 0:
+                    paren_depth -= 1
+                    last_non_ws = ch
+                    continue
+                if ch == "[":
+                    bracket_depth += 1
+                    last_non_ws = ch
+                    continue
+                if ch == "]" and bracket_depth > 0:
+                    bracket_depth -= 1
+                    last_non_ws = ch
+                    continue
+                if paren_depth > 0 or bracket_depth > 0:
+                    if not ch.isspace():
+                        last_non_ws = ch
+                    continue
+            if ch == "{":
+                if depth == 0 and not opened and last_non_ws == ":":
+                    line_only_type_brace = True
+                elif depth == 0:
+                    line_only_type_brace = False
+                depth += 1
+                opened = True
+            elif ch == "}":
+                depth -= 1
+            if not ch.isspace():
+                last_non_ws = ch
+        if opened and depth <= 0:
+            # Handle multi-line TS return type `): { value: number }\n{` where
+            # the object type closes on line j and the body opens on line j+1.
+            if line_only_type_brace and j + 1 < limit:
+                nxt_clean, _ = _scan_code_line(lines[j + 1], state, language, _REGEX_LINE_CAP)
+                if nxt_clean.lstrip(" \t").startswith("{"):
+                    opened = False
+                    depth = 0
+                    continue
+            return j + 1
+        if not opened:
+            if paren_depth == 0 and bracket_depth == 0:
+                if sig_closed_at is None:
+                    sig_closed_at = j
+            else:
+                sig_closed_at = None
+        if not opened and state[0] == "":
+            if sig_closed_at is not None and j - sig_closed_at >= 4:
+                # Declaration without a body (interface method, prototype, alias).
+                return start0 + 1
+            if j - start0 >= 40:
+                return start0 + 1
+        if not opened and paren_depth == 0 and bracket_depth == 0 and ";" in scan:
+            return j + 1
+    return start0 + 1
+
+
+def _find_js_arrow_end(lines: list[str], start0: int, language: str) -> int:
+    """1-based end line of a JS/TS arrow function without borrowing braces from
+    a following declaration when the arrow is expression-bodied."""
+    state: tuple[str, int] = ("", 0)
+    clean0, state = _scan_code_line(lines[start0], state, language, _REGEX_LINE_CAP)
+    pos = clean0.find("=>")
+    if pos < 0:
+        return start0 + 1
+    tail = clean0[pos + 2:].lstrip(" \t")
+    if not tail:
+        # Arrow body starts on the next non-blank line.
+        if start0 + 1 >= len(lines):
+            return start0 + 1
+        nxt_clean, _ = _scan_code_line(lines[start0 + 1], state, language, _REGEX_LINE_CAP)
+        nxt_s = nxt_clean.lstrip(" \t")
+        if nxt_s.startswith("{"):
+            return _find_brace_end(lines, start0 + 1, language)
+        if not nxt_s:
+            return start0 + 1
+        # Track balanced parens/brackets/braces starting on next line.
+        start_expr = start0 + 1
+        expr_first = nxt_clean
+        expr_state = state
+    elif tail.startswith("{"):
+        return _find_brace_end(lines, start0, language, after_token="=>")
+    else:
+        start_expr = start0
+        expr_first = clean0[pos + 2:]
+        expr_state = state
+
+    paren = bracket = brace = 0
+    limit = min(len(lines), start_expr + 200)
+    cur_state = expr_state
+    for j in range(start_expr, limit):
+        if j == start_expr:
+            seg = expr_first
+        else:
+            seg, cur_state = _scan_code_line(lines[j], cur_state, language, _REGEX_LINE_CAP)
+        for ch in seg:
+            if ch == "(":
+                paren += 1
+            elif ch == ")" and paren > 0:
+                paren -= 1
+            elif ch == "[":
+                bracket += 1
+            elif ch == "]" and bracket > 0:
+                bracket -= 1
+            elif ch == "{":
+                brace += 1
+            elif ch == "}" and brace > 0:
+                brace -= 1
+        if cur_state[0] == "" and paren == 0 and bracket == 0 and brace == 0:
+            return j + 1
+    return start0 + 1
+
+
+def _find_end_keyword(lines: list[str], start0: int, max_scan: int = 1000) -> int:
+    """1-based end line for Ruby/Lua `end`-terminated blocks (indent-matched)."""
+    base_indent = len(lines[start0]) - len(lines[start0].lstrip(" \t"))
+    limit = min(len(lines), start0 + max_scan)
+    for j in range(start0 + 1, limit):
+        ln = lines[j]
+        s = ln.lstrip(" \t")
+        if s == "end" or s.startswith(("end ", "end\t", "end#")):
+            ind = len(ln) - len(s)
+            if ind <= base_indent:
+                return j + 1
+    return start0 + 1
+
+
+_GO_TYPE_RE = re.compile(r"^type[ \t]+([A-Za-z_]\w*)(?:\[[^\]]*\])?[ \t]+(struct|interface|\S+)")
+_GO_METHOD_RE = re.compile(
+    r"^func[ \t]+\([^)]*?\*?\s*([A-Za-z_]\w*)(?:\[[^\]]*\])?\)[ \t]+([A-Za-z_]\w*)[ \t]*\("
+)
+_GO_FUNC_RE = re.compile(r"^func[ \t]+([A-Za-z_]\w*)(?:\[[^\]]*\])?[ \t]*\(")
+_GO_SINGLE_CV_RE = re.compile(r"^(const|var)[ \t]+([A-Za-z_]\w*)\b")
+_GO_GROUP_CV_RE = re.compile(r"^(const|var)[ \t]+\(")
+_GO_GROUP_ITEM_RE = re.compile(r"^[ \t]+([A-Za-z_]\w*)\b(?![ \t]*\()")
+_GO_IMPORT_SINGLE_RE = re.compile(r'^import[ \t]+(?:[A-Za-z_.]\w*[ \t]+)?"([^"]+)"')
+_GO_IMPORT_BLOCK_RE = re.compile(r"^import[ \t]+\(")
+_GO_IMPORT_ITEM_RE = re.compile(r'^[ \t]+(?:[A-Za-z_.]\w*[ \t]+)?"([^"]+)"')
+
+_JS_CLASS_RE = re.compile(
+    r"^[ \t]*(?:export[ \t]+)?(?:default[ \t]+)?(?:declare[ \t]+)?(?:abstract[ \t]+)?class[ \t]+([A-Za-z_$]\w*)"
+)
+_JS_IFACE_RE = re.compile(
+    r"^[ \t]*(?:export[ \t]+)?(?:declare[ \t]+)?(interface|type|enum)[ \t]+([A-Za-z_$]\w*)"
+)
+_JS_FUNC_RE = re.compile(
+    r"^[ \t]*(?:export[ \t]+)?(?:default[ \t]+)?(?:declare[ \t]+)?(?:async[ \t]+)?function\*?[ \t]+([A-Za-z_$]\w*)[ \t]*[(<]"
+)
+_JS_ARROW_RE = re.compile(
+    r"^[ \t]*(?:export[ \t]+)?(?:const|let|var)[ \t]+([A-Za-z_$]\w*)(?:[ \t]*:[^=]+)?[ \t]*=[ \t]*(?:async[ \t]+)?(?:\([^)]*\)|[A-Za-z_$]\w*)[ \t]*(?::[^=]+)?=>"
+)
+_JS_METHOD_RE = re.compile(
+    r"^[ \t]+(?:(?:public|private|protected|static|readonly|override|async|get|set)[ \t]+)*([A-Za-z_$]\w*)[ \t]*(?:<[^>]*>)?\([^)]*\)[ \t]*(?::[^{;]+)?\{"
+)
+_JS_IMPORT_RE = re.compile(r'''^[ \t]*import\b.*?\bfrom[ \t]+['"]([^'"]+)['"]''')
+
+_RUST_TYPE_RE = re.compile(
+    r"^[ \t]*(?:pub(?:\([^)]*\))?[ \t]+)?(struct|enum|trait|type|mod)[ \t]+([A-Za-z_]\w*)"
+)
+_RUST_IMPL_RE = re.compile(
+    r"^[ \t]*(?:unsafe[ \t]+)?impl(?:<[^>]*>)?[ \t]+(?:[A-Za-z0-9_:<>]+[ \t]+for[ \t]+)?([A-Za-z_]\w*)"
+)
+_RUST_FN_RE = re.compile(
+    r"^[ \t]*(?:pub(?:\([^)]*\))?[ \t]+)?(?:(?:async|unsafe|const|extern(?:\s+\"[^\"]*\")?)[ \t]+)*fn[ \t]+([A-Za-z_]\w*)"
+)
+_RUST_USE_RE = re.compile(r"^[ \t]*(?:pub[ \t]+)?use[ \t]+([^;]+);")
+
+_JAVA_TYPE_RE = re.compile(
+    r"^[ \t]*(?:(?:public|private|protected|abstract|final|static|sealed|non-sealed|data|open|internal|partial)[ \t]+)*(class|interface|enum|record|struct|object|trait|protocol)[ \t]+([A-Za-z_]\w*)"
+)
+_JVM_METHOD_RE = re.compile(
+    r"^[ \t]+(?:(?:public|private|protected|static|final|synchronized|abstract|virtual|override|async|extern|suspend|inline|open|internal)[ \t]+)+(?:<[^>]+>[ \t]+)?(?:[A-Za-z_][\w.<>\[\], ?]*[ \t]+)?([A-Za-z_]\w*)[ \t]*\([^;]*\)[ \t]*(?:throws[ \t]+[^{]+)?\{"
+)
+_KT_FUN_RE = re.compile(
+    r"^[ \t]*(?:(?:public|private|protected|internal|override|open|suspend|inline|operator|infix|tailrec|external)[ \t]+)*fun[ \t]+(?:<[^>]+>[ \t]+)?(?:[A-Za-z_]\w*\.)?([A-Za-z_]\w*)[ \t]*\("
+)
+_SCALA_DEF_RE = re.compile(
+    r"^[ \t]*(?:(?:override|private|protected|final|implicit|inline)[ \t]+)*def[ \t]+([A-Za-z_]\w*)"
+)
+_SWIFT_FUNC_RE = re.compile(
+    r"^[ \t]*(?:(?:public|private|fileprivate|internal|open|static|class|override|mutating|nonmutating)[ \t]+)*(?:(func)[ \t]+([A-Za-z_]\w*)|(init)\??[ \t]*\()"
+)
+_PHP_FUNC_RE = re.compile(
+    r"^[ \t]*(?:(?:public|private|protected|static|final|abstract)[ \t]+)*function[ \t]+&?([A-Za-z_]\w*)[ \t]*\("
+)
+_JVM_IMPORT_RE = re.compile(r"^[ \t]*(?:import|using|use)[ \t]+(?:static[ \t]+)?([A-Za-z_][\w.*\\]+)")
+
+_C_INCLUDE_RE = re.compile(r'^[ \t]*#[ \t]*include[ \t]+[<"]([^>"]+)[>"]')
+_C_TYPE_RE = re.compile(
+    r"^[ \t]*(?:template[ \t]*<[^>]*>[ \t]*)?(namespace|class|struct|enum(?:[ \t]+class)?)[ \t]+([A-Za-z_]\w*)"
+)
+_C_TYPEDEF_RE = re.compile(r"^[ \t]*typedef[ \t]+.+?\b([A-Za-z_]\w*)[ \t]*;")
+_C_FUNC_RE = re.compile(
+    r"^(?:template[ \t]*<[^>]*>[ \t]*)?(?:(?:static|inline|extern|virtual|constexpr|consteval|explicit|friend|unsigned|signed|long|short|const|volatile)[ \t]+)*(?:[A-Za-z_][\w:<>]*[ \t*&]+)+([A-Za-z_][\w:~]*)[ \t]*\([^;]*\)[ \t]*(?:const|noexcept|override|final|->[^{]+)*\{"
+)
+
+_RUBY_MOD_RE = re.compile(r"^[ \t]*(module|class)[ \t]+([A-Za-z_][\w:]*)")
+_RUBY_DEF_RE = re.compile(r"^[ \t]*def[ \t]+(?:self\.)?([A-Za-z_]\w*[?!=]?)")
+_RUBY_REQ_RE = re.compile(r'''^[ \t]*require(?:_relative)?[ \t]+['"]([^'"]+)['"]''')
+
+_LUA_FUNC_RE = re.compile(r"^[ \t]*(?:local[ \t]+)?function[ \t]+([A-Za-z_][\w.:]*)[ \t]*\(")
+_SH_FUNC_RE = re.compile(
+    r"^[ \t]*(?:function[ \t]+([A-Za-z_][\w-]*)(?:[ \t]*\(\))?|([A-Za-z_][\w-]*)[ \t]*\(\))[ \t]*\{"
+)
+_SH_SRC_RE = re.compile(r"^[ \t]*(?:source|\.)[ \t]+([^\s;#]+)")
+
+
+def _regex_extract(source: str, language: str) -> tuple[list[dict[str, Any]], list[str]]:
+    """Zero-dependency stdlib structural symbol extractor for non-Python code.
+
+    Fallback rung when neither ``tree-sitter`` nor ``universal-ctags`` is
+    installed. Linear-time anchored regexes with brace/end range tracking.
+    """
+    lines = source.splitlines()
+    n = len(lines)
+    symbols: list[dict[str, Any]] = []
+    imports: list[str] = []
+
+    def add(name: str, kind: str, idx0: int, end_ln: int, scope: str | None = None) -> None:
+        if not name or name in _CTRL_WORDS:
+            return
+        sig = lines[idx0].strip() if 0 <= idx0 < n else name
+        a = idx0 + 1
+        b = end_ln if end_ln >= a else a
+        symbols.append(_sym(name, kind, sig, a, b, scope))
+
+    def _match(rx: re.Pattern[str], text: str) -> re.Match[str] | None:
+        return rx.match(text, 0, _REGEX_LINE_CAP)
+
+    def _code_lines() -> list[tuple[int, str]]:
+        """Return (idx0, line) pairs for lines that begin outside multiline
+        block comments and multiline raw/triple-quoted strings."""
+        kept: list[tuple[int, str]] = []
+        lex_state: tuple[str, int] = ("", 0)
+        for idx0, line in enumerate(lines):
+            if lex_state[0] == "":
+                kept.append((idx0, line))
+            _, lex_state = _scan_code_line(line, lex_state, language, _REGEX_LINE_CAP)
+        return kept
+
+    if language == "go":
+        in_import = False
+        group_cv_kind: str | None = None
+        for i, ln in _code_lines():
+            s = ln.lstrip(" \t")
+            if in_import:
+                if s.startswith(")"):
+                    in_import = False
+                    continue
+                m = _match(_GO_IMPORT_ITEM_RE, ln)
+                if m:
+                    imports.append(m.group(1))
+                continue
+            if group_cv_kind is not None:
+                if s.startswith(")"):
+                    group_cv_kind = None
+                    continue
+                if s and not s.startswith("//"):
+                    m = _match(_GO_GROUP_ITEM_RE, ln)
+                    if m:
+                        add(m.group(1), group_cv_kind, i, i + 1, None)
+                continue
+            if _match(_GO_IMPORT_BLOCK_RE, ln):
+                in_import = True
+                continue
+            m = _match(_GO_IMPORT_SINGLE_RE, ln)
+            if m:
+                imports.append(m.group(1))
+                continue
+            m = _match(_GO_GROUP_CV_RE, ln)
+            if m:
+                group_cv_kind = "constant" if m.group(1) == "const" else "variable"
+                continue
+            m = _match(_GO_SINGLE_CV_RE, ln)
+            if m:
+                kind = "constant" if m.group(1) == "const" else "variable"
+                add(m.group(2), kind, i, i + 1, None)
+                continue
+            m = _match(_GO_TYPE_RE, ln)
+            if m:
+                tkind = m.group(2) if m.group(2) in ("struct", "interface") else "type"
+                if tkind in ("struct", "interface") or "{" in _scan_code_line(ln, ("", 0), language)[0]:
+                    end_ln = _find_brace_end(lines, i, language)
+                else:
+                    end_ln = i + 1
+                add(m.group(1), tkind, i, end_ln, None)
+                continue
+            m = _match(_GO_METHOD_RE, ln)
+            if m:
+                add(m.group(2), "method", i, _find_brace_end(lines, i, language), m.group(1))
+                continue
+            m = _match(_GO_FUNC_RE, ln)
+            if m:
+                add(m.group(1), "function", i, _find_brace_end(lines, i, language), None)
+        return symbols, sorted(dict.fromkeys(imports))
+
+    if language in ("typescript", "javascript"):
+        # Track active class/interface scopes as (name, end_line_1based).
+        scopes: list[tuple[str, int]] = []
+        for i, ln in _code_lines():
+            ln_no = i + 1
+            while scopes and ln_no > scopes[-1][1]:
+                scopes.pop()
+            m = _match(_JS_IMPORT_RE, ln)
+            if m:
+                imports.append(m.group(1))
+                continue
+            cur_scope = scopes[-1][0] if scopes else None
+            m = _match(_JS_CLASS_RE, ln)
+            if m:
+                end_ln = _find_brace_end(lines, i, language)
+                add(m.group(1), "class", i, end_ln, cur_scope)
+                if end_ln > ln_no:
+                    scopes.append((m.group(1), end_ln))
+                continue
+            m = _match(_JS_IFACE_RE, ln)
+            if m:
+                if m.group(1) == "type" and "{" not in _scan_code_line(ln, ("", 0), language)[0]:
+                    end_ln = i + 1
+                else:
+                    end_ln = _find_brace_end(lines, i, language)
+                add(m.group(2), m.group(1), i, end_ln, cur_scope)
+                continue
+            m = _match(_JS_FUNC_RE, ln)
+            if m:
+                add(m.group(1), "function", i, _find_brace_end(lines, i, language), cur_scope)
+                continue
+            m = _match(_JS_ARROW_RE, ln)
+            if m:
+                add(m.group(1), "function", i, _find_js_arrow_end(lines, i, language), cur_scope)
+                continue
+            if cur_scope is not None:
+                m = _match(_JS_METHOD_RE, ln)
+                if m and m.group(1) not in _CTRL_WORDS:
+                    add(m.group(1), "method", i, _find_brace_end(lines, i, language), cur_scope)
+        return symbols, sorted(dict.fromkeys(imports))
+
+    if language == "rust":
+        scopes = []
+        for i, ln in _code_lines():
+            ln_no = i + 1
+            while scopes and ln_no > scopes[-1][1]:
+                scopes.pop()
+            m = _match(_RUST_USE_RE, ln)
+            if m:
+                imports.append(m.group(1).strip())
+                continue
+            cur_scope = scopes[-1][0] if scopes else None
+            m = _match(_RUST_IMPL_RE, ln)
+            if m:
+                end_ln = _find_brace_end(lines, i, language)
+                if end_ln > ln_no:
+                    scopes.append((m.group(1), end_ln))
+                continue
+            m = _match(_RUST_TYPE_RE, ln)
+            if m:
+                end_ln = _find_brace_end(lines, i, language)
+                add(m.group(2), m.group(1), i, end_ln, cur_scope)
+                if m.group(1) in ("trait", "mod") and end_ln > ln_no:
+                    scopes.append((m.group(2), end_ln))
+                continue
+            m = _match(_RUST_FN_RE, ln)
+            if m:
+                kind = "method" if cur_scope else "function"
+                add(m.group(1), kind, i, _find_brace_end(lines, i, language), cur_scope)
+        return symbols, sorted(dict.fromkeys(imports))
+
+    if language in ("c", "c++"):
+        scopes = []
+        for i, ln in _code_lines():
+            ln_no = i + 1
+            while scopes and ln_no > scopes[-1][1]:
+                scopes.pop()
+            m = _match(_C_INCLUDE_RE, ln)
+            if m:
+                imports.append(m.group(1))
+                continue
+            cur_scope = scopes[-1][0] if scopes else None
+            m = _match(_C_TYPE_RE, ln)
+            if m:
+                raw_kind = m.group(1).split()[0]
+                end_ln = _find_brace_end(lines, i, language)
+                if raw_kind != "namespace":
+                    add(m.group(2), raw_kind, i, end_ln, cur_scope)
+                if end_ln > ln_no and raw_kind in ("namespace", "class", "struct"):
+                    scopes.append((m.group(2), end_ln))
+                continue
+            m = _match(_C_TYPEDEF_RE, ln)
+            if m:
+                add(m.group(1), "type", i, i + 1, cur_scope)
+                continue
+            m = _match(_C_FUNC_RE, ln)
+            if m:
+                full = m.group(1)
+                name = full.split("::")[-1]
+                if name not in _CTRL_WORDS:
+                    kind = "method" if (cur_scope and "::" not in full) else "function"
+                    add(name, kind, i, _find_brace_end(lines, i, language), cur_scope if "::" not in full else None)
+        return symbols, sorted(dict.fromkeys(imports))
+
+    if language in ("java", "c#", "kotlin", "scala", "swift", "php"):
+        scopes = []
+        for i, ln in _code_lines():
+            ln_no = i + 1
+            while scopes and ln_no > scopes[-1][1]:
+                scopes.pop()
+            m = _match(_JVM_IMPORT_RE, ln)
+            if m:
+                imports.append(m.group(1))
+                continue
+            cur_scope = scopes[-1][0] if scopes else None
+            m = _match(_JAVA_TYPE_RE, ln)
+            if m:
+                end_ln = _find_brace_end(lines, i, language)
+                add(m.group(2), m.group(1), i, end_ln, cur_scope)
+                if end_ln > ln_no:
+                    scopes.append((m.group(2), end_ln))
+                continue
+            if language == "kotlin":
+                m = _match(_KT_FUN_RE, ln)
+                if m:
+                    add(m.group(1), "method" if cur_scope else "function", i, _find_brace_end(lines, i, language), cur_scope)
+            elif language == "scala":
+                m = _match(_SCALA_DEF_RE, ln)
+                if m:
+                    add(m.group(1), "method" if cur_scope else "function", i, _find_brace_end(lines, i, language), cur_scope)
+            elif language == "swift":
+                m = _match(_SWIFT_FUNC_RE, ln)
+                if m:
+                    nm = m.group(2) or m.group(3)
+                    add(nm, "method" if cur_scope else "function", i, _find_brace_end(lines, i, language), cur_scope)
+            elif language == "php":
+                m = _match(_PHP_FUNC_RE, ln)
+                if m:
+                    add(m.group(1), "method" if cur_scope else "function", i, _find_brace_end(lines, i, language), cur_scope)
+            elif cur_scope is not None:
+                m = _match(_JVM_METHOD_RE, ln)
+                if m and m.group(1) not in _CTRL_WORDS:
+                    add(m.group(1), "method", i, _find_brace_end(lines, i, language), cur_scope)
+        return symbols, sorted(dict.fromkeys(imports))
+
+    if language == "ruby":
+        scopes = []
+        for i, ln in enumerate(lines):
+            ln_no = i + 1
+            while scopes and ln_no > scopes[-1][1]:
+                scopes.pop()
+            m = _match(_RUBY_REQ_RE, ln)
+            if m:
+                imports.append(m.group(1))
+                continue
+            cur_scope = scopes[-1][0] if scopes else None
+            m = _match(_RUBY_MOD_RE, ln)
+            if m:
+                end_ln = _find_end_keyword(lines, i)
+                add(m.group(2), m.group(1), i, end_ln, cur_scope)
+                if end_ln > ln_no:
+                    scopes.append((m.group(2), end_ln))
+                continue
+            m = _match(_RUBY_DEF_RE, ln)
+            if m:
+                add(m.group(1), "method" if cur_scope else "function", i, _find_end_keyword(lines, i), cur_scope)
+        return symbols, sorted(dict.fromkeys(imports))
+
+    if language == "lua":
+        for i, ln in enumerate(lines):
+            m = _match(_LUA_FUNC_RE, ln)
+            if m:
+                add(m.group(1).replace(":", "."), "function", i, _find_end_keyword(lines, i), None)
+        return symbols, imports
+
+    if language == "shell":
+        for i, ln in enumerate(lines):
+            m = _match(_SH_SRC_RE, ln)
+            if m:
+                imports.append(m.group(1).strip("'\""))
+                continue
+            m = _match(_SH_FUNC_RE, ln)
+            if m:
+                nm = m.group(1) or m.group(2)
+                add(nm, "function", i, _find_brace_end(lines, i, language), None)
+        return symbols, sorted(dict.fromkeys(imports))
+
+    return [], []
+
+
+def outline_code_file(
+    path_str: str,
+    policy: Any,
+    budget_tokens: int,
+    *,
+    display_path: str | None = None,
+    max_bytes: int = 2 * 1024 * 1024,
+) -> str | None:
+    """Bounded, redaction-aware symbol outline for a source file without
+    writing into a workspace store. Used for trusted outside-root reads where
+    no ``repo:<rel>`` handle applies; absolute paths never appear in output."""
+    lang = language_for(path_str)
+    if not lang:
+        return None
+    try:
+        with open(path_str, "rb") as fh:
+            data = fh.read(max_bytes + 1)
+    except OSError:
+        return None
+    if not data or b"\x00" in data[:4096]:
+        return None
+    if len(data) > max_bytes:
+        data = data[:max_bytes]
+    raw_source = data.decode("utf-8", "replace")
+    hits = secret_hits(raw_source, 0, len(raw_source), policy=policy)
+    redacted_source = (
+        mask_hits(raw_source, 0, len(raw_source), hits) if hits else raw_source
+    )
+    label = display_path or os.path.basename(path_str)
+    with redaction_scope(policy):
+        syms, imps, parser = _extract(redacted_source, lang, label)
+    if not syms:
+        return None
+    n_lines = len(redacted_source.splitlines())
+    rows: list[dict[str, Any]] = []
+    for sym in syms:
+        a, b = int(sym["range"][0]), int(sym["range"][1])
+        if n_lines:
+            if a < 1:
+                a = 1
+            elif a > n_lines:
+                a = n_lines
+            if b < a:
+                b = a
+            elif b > n_lines:
+                b = n_lines
+        else:
+            a, b = 1, 1
+        rows.append({**sym, "range": [a, b]})
+    rows.sort(key=lambda s: (s["range"][0], s["range"][1], s["name"], s["kind"]))
+    sk = {
+        "schema": SKELETON_SCHEMA,
+        "file": label,
+        "language": lang,
+        "parser": parser,
+        "symbols": rows,
+        "imports": sorted(dict.fromkeys(imps)),
+    }
+    with redaction_scope(policy):
+        rendered = skeleton_outline(sk, budget_tokens)
+    # Strip repo:<label> header/next lines when no workspace-relative handle exists.
+    if display_path is None:
+        out_lines = [
+            f"[ctx skeleton {label}]" if ln == f"[ctx skeleton repo:{label}]" else ln
+            for ln in rendered.splitlines()
+            if not ln.strip().startswith(f"ctx get repo:{label}")
+            and ln.strip() != "next:"
+        ]
+        return "\n".join(out_lines)
+    return rendered
