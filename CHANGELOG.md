@@ -6,6 +6,33 @@ with a minor bump per mechanism wave (see CONTRIBUTING.md).
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-11-28 (PyPI release)
+
+Install this release with `python -m pip install 'ctx-harness==0.6.0'`.
+Python version ordering places the previously published 0.44.0 above 0.6.0.
+
+- Zero-dependency stdlib structural symbol extraction (`regex` fallback rung in
+  `ctx.skeleton`) for Go, TypeScript, JavaScript, Rust, Java, Kotlin, C, C++,
+  C#, Swift, Scala, Ruby, PHP, Lua, and Shell when neither `tree-sitter` nor
+  `universal-ctags` is installed (`CTX_NO_REGEX_SKELETON` escape hatch).
+  Installing `ctags` or `tree-sitter` automatically invalidates cached `regex`
+  skeletons via `_backend_fingerprint`.
+- Whole-file `PreToolUse` code outlines for trusted outside-workspace source
+  files (`CTX_ALLOW_OUTSIDE_READ_PREFIXES`) via `ctx.skeleton.outline_code_file`
+  with pre-slice secret redaction and zero absolute-path leaks.
+- Pure-stdlib structured plain-text `PreToolUse` outlines
+  (`ctx.digest.textoutline`) for `.txt` / `.text` / `.out` files matching
+  aligned columnar tables, delimited section dividers (`--- Title ---`),
+  key-value record streams, or timestamped message threads, eliminating silent
+  first-page blind pagination on range-style hosts while keeping unstructured
+  logs and prose on the existing window path.
+- `PostToolUse` line-number wrapper stripping (`strip_line_number_wrapper` in
+  `ctx.digest`): uniformly numbered host file-read outputs (`1: `, `1→`,
+  `1\t`, plus optional `Showing lines A-B of N` banners) now sniff cleanly as
+  `markdown/v1`, `delimited/v1`, `json/v1`, `config/v1`, `markup/v1`,
+  `comm/v1`, or `table/v1` while preserving 1-to-1 line coordinates against the
+  stored `run:<id>#stdout` artifact.
+
 ## [0.5.0] - 2026-11-28 (PyPI release)
 
 Install this release with `python -m pip install 'ctx-harness==0.5.0'`.

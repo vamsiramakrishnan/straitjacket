@@ -37,6 +37,7 @@ REQUIRED_FILES = {
     "ctx/digest/markupprof.py",
     "ctx/digest/mdprof.py",
     "ctx/digest/nbprof.py",
+    "ctx/digest/textoutline.py",
     "ctx/residence.py",
     "ctx/config_edit.py",
     "ctx/host_config.py",

@@ -338,9 +338,17 @@ def test_fallback_chain_ctags_absent(env, monkeypatch):
     py = skeleton_for(store, ws, "sample.py")
     assert py["parser"] == "ast"  # python degrades to stdlib ast
     ts = skeleton_for(store, ws, "greeter.ts")
-    assert ts["parser"] == "none"  # non-python with no backend: declared none
-    assert ts["symbols"] == [] and ts["imports"] == []
+    assert ts["parser"] == "regex"  # non-python degrades to stdlib regex fallback
+    assert {"Greeter", "Greeting", "makeGreeter", "arrowThing"} <= {
+        s["name"] for s in ts["symbols"]
+    }
     assert ts["language"] == "typescript"
+    # Explicitly disabling the regex rung degrades cleanly to declared none.
+    monkeypatch.setenv("CTX_NO_REGEX_SKELETON", "1")
+    ts_none = skeleton_for(store, ws, "greeter.ts")
+    assert ts_none["parser"] == "none"
+    assert ts_none["symbols"] == [] and ts_none["imports"] == []
+    assert ts_none["language"] == "typescript"
 
 
 def test_ctx_no_ctags_silences_every_ctags_call_site(
@@ -403,7 +411,7 @@ def test_ctx_no_ctags_silences_every_ctags_call_site(
     m = repomap.repo_map(store, ws, budget=1200)
 
     assert not invoked, f"ctags invoked despite CTX_NO_CTAGS: {invoked!r}"
-    assert ts["parser"] == "none"  # degrades down the chain, never errors
+    assert ts["parser"] == "regex"  # degrades down the chain, never errors
     assert "web.js" not in m  # map omits non-python files rather than erroring
 
 
@@ -513,6 +521,7 @@ def test_stats_ts_without_any_backend_falls_through(env, monkeypatch):
 
     _no_tree_sitter(monkeypatch)
     _no_ctags(monkeypatch)
+    monkeypatch.setenv("CTX_NO_REGEX_SKELETON", "1")
     store, ws = env
     out = stats(store, ws, "repo:greeter.ts")
     assert "[ctx skeleton" not in out
@@ -541,7 +550,7 @@ def test_installing_a_backend_invalidates_a_degraded_skeleton(env, monkeypatch):
     _no_tree_sitter(monkeypatch)
     _no_ctags(monkeypatch)
     degraded = skel.skeleton_for(store, ws, "greeter.ts")
-    assert degraded["parser"] == "none" and degraded["symbols"] == []
+    assert degraded["parser"] == "regex" and degraded["symbols"]
 
     monkeypatch.undo()  # ctags arrives; the file on disk never changed
     _no_tree_sitter(monkeypatch)
@@ -556,11 +565,13 @@ def test_the_fingerprint_is_per_language_and_claims_only_real_rungs(monkeypatch)
     a backend that would not actually fire — and computed per language, so a
     Go grammar arriving does not force every Python skeleton to be reparsed.
     In the same stripped environment Python still has its stdlib ``ast`` rung
-    and TypeScript has nothing left."""
+    and TypeScript uses its stdlib ``regex`` rung unless disabled."""
     import ctx.skeleton as skel
 
     _no_tree_sitter(monkeypatch)
     _no_ctags(monkeypatch)
     assert skel._backend_fingerprint("python") == "ast"
-    assert skel._backend_fingerprint("typescript") == "none"
+    assert skel._backend_fingerprint("typescript") == "regex"
     assert skel._backend_fingerprint(None) == "none"
+    monkeypatch.setenv("CTX_NO_REGEX_SKELETON", "1")
+    assert skel._backend_fingerprint("typescript") == "none"
