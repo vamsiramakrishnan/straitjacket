@@ -464,6 +464,35 @@ def test_regex_skeleton_multiline_raw_string_and_block_comment_braces(monkeypatc
     assert tamap["ID"]["range"] == [1, 1]
     assert tamap["run"]["range"] == [2, 4]
 
+    # Multiline Go signature with >4 parameter lines + JS regex literal with `}`.
+    go_multi = "\n".join([
+        "package demo",
+        "func BigSig(",
+        "\ta int,",
+        "\tb int,",
+        "\tc int,",
+        "\td int,",
+        "\te int,",
+        "\tf int,",
+        ") int {",
+        "\treturn a + b + c + d + e + f",
+        "}",
+    ])
+    gmsyms, _, _ = skeleton._extract(go_multi, "go", "multi.go")
+    assert gmsyms[0]["name"] == "BigSig"
+    assert gmsyms[0]["range"] == [2, 11]
+
+    js_re = "\n".join([
+        "export function hasClosingBrace(s) {",
+        "  const re = /}/;",
+        "  const re2 = /[}]/g;",
+        "  return re.test(s) || re2.test(s);",
+        "}",
+    ])
+    jrsyms, _, _ = skeleton._extract(js_re, "javascript", "re.js")
+    assert jrsyms[0]["name"] == "hasClosingBrace"
+    assert jrsyms[0]["range"] == [1, 5]
+
 
 def test_posttooluse_numbered_json_jsonl_and_notebook_structured_retrieval(
     state_home, workspace_dir

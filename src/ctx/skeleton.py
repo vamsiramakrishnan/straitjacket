@@ -1094,6 +1094,32 @@ _BACKTICK_MULTILINE_LANGS = frozenset({"go", "javascript", "typescript"})
 _TRIPLE_QUOTE_MULTILINE_LANGS = frozenset({"java", "kotlin", "swift", "scala", "c#"})
 
 
+_JS_REGEX_PRE_KEYWORDS = frozenset({
+    "return", "case", "throw", "in", "of", "typeof", "void", "delete",
+    "await", "yield", "new", "else", "do",
+})
+_JS_REGEX_PRE_CHARS = frozenset("(=,:;[!&|?{}~^+-*%<>")
+
+
+def _can_start_js_regex(line: str, slash_idx: int) -> bool:
+    """True when ``/`` at ``slash_idx`` is in expression position where JS/TS
+    grammar parses a regex literal rather than division."""
+    k = slash_idx - 1
+    while k >= 0 and line[k] in (" ", "\t"):
+        k -= 1
+    if k < 0:
+        return True
+    ch = line[k]
+    if ch in _JS_REGEX_PRE_CHARS:
+        return True
+    if ch.isalnum() or ch in ("_", "$"):
+        end_w = k + 1
+        while k > 0 and (line[k - 1].isalnum() or line[k - 1] in ("_", "$")):
+            k -= 1
+        return line[k:end_w] in _JS_REGEX_PRE_KEYWORDS
+    return False
+
+
 def _scan_code_line(
     line: str,
     state: tuple[str, int],
@@ -1179,6 +1205,29 @@ def _scan_code_line(
                 mode, depth = "/*", 1
                 i += 2
                 continue
+            if language in ("javascript", "typescript") and _can_start_js_regex(line, i):
+                # Consume single-line JS/TS regex literal (handling `\/` escapes
+                # and `[...]` character classes) so `/}/` never closes a block.
+                j_re = i + 1
+                in_cls = False
+                closed_re = False
+                while j_re < n:
+                    rc = line[j_re]
+                    if rc == "\\":
+                        j_re += 2
+                        continue
+                    if rc == "[" and not in_cls:
+                        in_cls = True
+                    elif rc == "]" and in_cls:
+                        in_cls = False
+                    elif rc == "/" and not in_cls:
+                        closed_re = True
+                        j_re += 1
+                        break
+                    j_re += 1
+                if closed_re:
+                    i = j_re
+                    continue
         if allow_tq and line.startswith('"""', i):
             mode, depth = '"""', 0
             i += 3
@@ -1238,6 +1287,7 @@ def _find_brace_end(
     paren_depth = 0
     bracket_depth = 0
     opened = False
+    sig_closed_at: int | None = None
     state: tuple[str, int] = ("", 0)
     limit = min(len(lines), start0 + max_scan)
     seen_after = after_token is None
@@ -1302,9 +1352,18 @@ def _find_brace_end(
                     depth = 0
                     continue
             return j + 1
-        if not opened and state[0] == "" and j - start0 >= 4:
-            # Declaration without a body (interface method, prototype, type alias).
-            return start0 + 1
+        if not opened:
+            if paren_depth == 0 and bracket_depth == 0:
+                if sig_closed_at is None:
+                    sig_closed_at = j
+            else:
+                sig_closed_at = None
+        if not opened and state[0] == "":
+            if sig_closed_at is not None and j - sig_closed_at >= 4:
+                # Declaration without a body (interface method, prototype, alias).
+                return start0 + 1
+            if j - start0 >= 40:
+                return start0 + 1
         if not opened and paren_depth == 0 and bracket_depth == 0 and ";" in scan:
             return j + 1
     return start0 + 1
